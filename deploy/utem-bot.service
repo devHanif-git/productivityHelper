@@ -1,0 +1,28 @@
+[Unit]
+Description=UTeM Student Assistant Telegram Bot
+After=network.target
+
+[Service]
+Type=simple
+User=utem-bot
+Group=utem-bot
+WorkingDirectory=/opt/utem-bot
+Environment=PATH=/opt/utem-bot/venv/bin
+ExecStart=/opt/utem-bot/venv/bin/python -m src.main
+Restart=always
+RestartSec=10
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/utem-bot/data /opt/utem-bot/logs
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=utem-bot
+
+[Install]
+WantedBy=multi-user.target
