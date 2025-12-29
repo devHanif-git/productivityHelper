@@ -77,6 +77,7 @@ from ..utils.semester_logic import (
 )
 from .conversations import (
     format_tomorrow_classes,
+    format_today_classes,
     format_week_schedule,
     format_pending_assignments,
     format_pending_tasks,
@@ -133,6 +134,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 /start - Start the bot and setup
 
 *Schedule*
+/today - Show today's classes
 /tomorrow - Show tomorrow's classes
 /week - Show this week's schedule
 
@@ -149,7 +151,10 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 /status - Overview of pending items
 
 *Management*
-/done <id> - Mark item as complete
+/done <type> <id> - Mark item as complete
+/edit <type> <id> <field> <value> - Edit item
+/online - Show online class settings
+/setonline <subject|all> <week#|date> - Set class online
 /help - Show this help message
 
 *Debug/Testing*
@@ -195,6 +200,15 @@ async def tomorrow_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     events = db.get_all_events()
 
     response = format_tomorrow_classes(schedule, events, today=get_today())
+    await update.message.reply_text(response)
+
+
+async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /today command - show today's classes."""
+    schedule = db.get_all_schedule()
+    events = db.get_all_events()
+
+    response = format_today_classes(schedule, events, today=get_today())
     await update.message.reply_text(response)
 
 
@@ -333,6 +347,183 @@ async def done_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         )
 
 
+async def online_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /online command - show online class overrides."""
+    overrides = db.get_online_overrides()
+
+    if not overrides:
+        await update.message.reply_text(
+            "No online class settings configured.\n\n"
+            "Use /setonline to set classes as online:\n"
+            "  /setonline BITP1113 week12\n"
+            "  /setonline all week12\n"
+            "  /setonline BITP1113 2025-01-15"
+        )
+        return
+
+    lines = ["Online class settings:"]
+    for o in overrides:
+        subject = o.get("subject_code") or "ALL classes"
+        week = o.get("week_number")
+        date = o.get("specific_date")
+
+        if week:
+            lines.append(f"- {subject} is online on Week {week}")
+        elif date:
+            lines.append(f"- {subject} is online on {date}")
+
+    await update.message.reply_text("\n".join(lines))
+
+
+async def setonline_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /setonline command - set a class as online for a week or date."""
+    args = context.args
+
+    if not args or len(args) < 2:
+        await update.message.reply_text(
+            "Usage: /setonline <subject|all> <week#|date>\n\n"
+            "Examples:\n"
+            "  /setonline BITP1113 week12\n"
+            "  /setonline all week12\n"
+            "  /setonline BITP1113 2025-01-15\n"
+            "  /setonline all tomorrow"
+        )
+        return
+
+    subject_arg = args[0].upper()
+    time_arg = " ".join(args[1:]).lower()
+
+    # Determine subject (None means all)
+    subject_code = None if subject_arg == "ALL" else subject_arg
+
+    # Parse time argument
+    week_number = None
+    specific_date = None
+
+    if time_arg.startswith("week"):
+        try:
+            week_number = int(time_arg.replace("week", "").strip())
+        except ValueError:
+            await update.message.reply_text("Invalid week number. Use format: week12")
+            return
+    elif time_arg == "tomorrow":
+        from datetime import timedelta
+        tomorrow = get_today() + timedelta(days=1)
+        specific_date = tomorrow.isoformat()
+    elif time_arg == "today":
+        specific_date = get_today().isoformat()
+    else:
+        # Try to parse as date
+        specific_date = time_arg
+
+    # Add the override
+    override_id = db.add_online_override(
+        subject_code=subject_code,
+        week_number=week_number,
+        specific_date=specific_date
+    )
+
+    subject_display = subject_code or "ALL classes"
+    if week_number:
+        await update.message.reply_text(
+            f"Set {subject_display} as online for Week {week_number}."
+        )
+    else:
+        await update.message.reply_text(
+            f"Set {subject_display} as online on {specific_date}."
+        )
+
+
+async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /edit command - edit schedule or assignment data with confirmation."""
+    args = context.args
+
+    if not args or len(args) < 4:
+        await update.message.reply_text(
+            "Usage: /edit <type> <id> <field> <value>\n\n"
+            "Examples:\n"
+            "  /edit schedule 1 room BK12\n"
+            "  /edit assignment 1 due 2025-01-15\n\n"
+            "Fields for schedule: room, lecturer\n"
+            "Fields for assignment: due, title"
+        )
+        return
+
+    item_type = args[0].lower()
+    try:
+        item_id = int(args[1])
+    except ValueError:
+        await update.message.reply_text("Invalid ID. Please provide a number.")
+        return
+
+    field = args[2].lower()
+    new_value = " ".join(args[3:])
+
+    if item_type == "schedule":
+        slot = db.get_schedule_by_id(item_id)
+        if not slot:
+            await update.message.reply_text(f"Schedule slot #{item_id} not found.")
+            return
+
+        if field not in ("room", "lecturer"):
+            await update.message.reply_text("Invalid field. Use 'room' or 'lecturer'.")
+            return
+
+        day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+        day_name = day_names[slot.get("day_of_week", 0)]
+        subject = slot.get("subject_code", "Unknown")
+        start = slot.get("start_time", "?")
+        old_value = slot.get(field if field != "lecturer" else "lecturer_name", "Not set")
+
+        # Store pending edit
+        context.user_data["pending_edit"] = {
+            "type": "schedule",
+            "id": item_id,
+            "field": field,
+            "new_value": new_value,
+            "description": f"{subject} ({day_name} {start})"
+        }
+
+        await update.message.reply_text(
+            f"Edit {subject} ({day_name} {start})?\n"
+            f"Change {field} from '{old_value}' to '{new_value}'?\n\n"
+            "Reply 'yes' to confirm or 'no' to cancel."
+        )
+
+    elif item_type == "assignment":
+        assignment = db.get_assignment_by_id(item_id)
+        if not assignment:
+            await update.message.reply_text(f"Assignment #{item_id} not found.")
+            return
+
+        if field not in ("due", "title"):
+            await update.message.reply_text("Invalid field. Use 'due' or 'title'.")
+            return
+
+        title = assignment.get("title", "Unknown")
+        old_value = assignment.get("due_date" if field == "due" else "title", "Not set")
+
+        # Store pending edit
+        context.user_data["pending_edit"] = {
+            "type": "assignment",
+            "id": item_id,
+            "field": field,
+            "new_value": new_value,
+            "description": title
+        }
+
+        await update.message.reply_text(
+            f"Edit assignment '{title}'?\n"
+            f"Change {field} from '{old_value}' to '{new_value}'?\n\n"
+            "Reply 'yes' to confirm or 'no' to cancel."
+        )
+
+    else:
+        await update.message.reply_text(
+            "Unknown item type. Use 'schedule' or 'assignment'."
+        )
+
+
 async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle incoming text messages - route by intent."""
     message_text = update.message.text
@@ -342,6 +533,39 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         response = await confirm_assignment(update, context)
         if response:
             await update.message.reply_text(response)
+            return
+
+    # Check if we're waiting for edit confirmation
+    if "pending_edit" in context.user_data:
+        response_lower = message_text.lower().strip()
+        pending = context.user_data["pending_edit"]
+
+        if response_lower in ("yes", "y", "ya", "confirm"):
+            # Execute the edit
+            if pending["type"] == "schedule":
+                field = pending["field"]
+                if field == "room":
+                    db.update_schedule_slot(pending["id"], room=pending["new_value"])
+                elif field == "lecturer":
+                    db.update_schedule_slot(pending["id"], lecturer_name=pending["new_value"])
+                await update.message.reply_text(
+                    f"Updated! {pending['description']} {field} is now '{pending['new_value']}'."
+                )
+            elif pending["type"] == "assignment":
+                field = pending["field"]
+                if field == "due":
+                    db.update_assignment(pending["id"], due_date=pending["new_value"])
+                elif field == "title":
+                    db.update_assignment(pending["id"], title=pending["new_value"])
+                await update.message.reply_text(
+                    f"Updated! Assignment '{pending['description']}' {field} is now '{pending['new_value']}'."
+                )
+            del context.user_data["pending_edit"]
+            return
+
+        elif response_lower in ("no", "n", "tidak", "cancel"):
+            del context.user_data["pending_edit"]
+            await update.message.reply_text("Edit cancelled.")
             return
 
     # Classify the intent
@@ -370,6 +594,9 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                 "Semester start date not set. Use /setup to configure."
             )
 
+    elif intent == Intent.QUERY_TODAY_CLASSES:
+        await today_command(update, context)
+
     elif intent == Intent.QUERY_TOMORROW_CLASSES:
         await tomorrow_command(update, context)
 
@@ -378,6 +605,174 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     elif intent == Intent.QUERY_NEXT_OFFDAY:
         await offday_command(update, context)
+
+    elif intent == Intent.QUERY_MIDTERM_BREAK:
+        events = db.get_all_events()
+        midterm = None
+        for event in events:
+            name = (event.get("name", "") + " " + event.get("name_en", "")).lower()
+            if "pertengahan" in name or "mid" in name:
+                if event.get("event_type") == "break":
+                    midterm = event
+                    break
+        if midterm:
+            start = midterm.get("start_date", "")
+            end = midterm.get("end_date", start)
+            name = midterm.get("name_en") or midterm.get("name", "Mid Semester Break")
+            await update.message.reply_text(f"{name}: {start} to {end}")
+        else:
+            await update.message.reply_text("Mid semester break dates not found in calendar.")
+
+    elif intent == Intent.QUERY_FINAL_EXAM:
+        events = db.get_all_events()
+        final = None
+        for event in events:
+            name = (event.get("name", "") + " " + event.get("name_en", "")).lower()
+            if ("akhir" in name or "final" in name) and event.get("event_type") == "exam":
+                final = event
+                break
+        if final:
+            start = final.get("start_date", "")
+            end = final.get("end_date", start)
+            name = final.get("name_en") or final.get("name", "Final Examination")
+            await update.message.reply_text(f"{name}: {start} to {end}")
+        else:
+            await update.message.reply_text("Final exam dates not found in calendar.")
+
+    elif intent == Intent.QUERY_MIDTERM_EXAM:
+        events = db.get_all_events()
+        midterm_exam = None
+        for event in events:
+            name = (event.get("name", "") + " " + event.get("name_en", "")).lower()
+            if ("pertengahan" in name or "mid" in name) and event.get("event_type") == "exam":
+                midterm_exam = event
+                break
+        if midterm_exam:
+            start = midterm_exam.get("start_date", "")
+            end = midterm_exam.get("end_date", start)
+            name = midterm_exam.get("name_en") or midterm_exam.get("name", "Mid Semester Examination")
+            await update.message.reply_text(f"{name}: {start} to {end}")
+        else:
+            await update.message.reply_text("Midterm exam dates not found in calendar.")
+
+    elif intent == Intent.EDIT_SCHEDULE:
+        # Natural language schedule edit - find matching schedule slot
+        subject_code = entities.subject_code
+        new_value = entities.title  # New room/lecturer value stored in title
+        if subject_code:
+            # Use fuzzy subject matching (supports subject name and code)
+            matching = db.get_schedule_by_subject(subject_code)
+            if matching:
+                slot = matching[0]  # Take first match
+                slot_id = slot.get("id")
+                day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+                day_name = day_names[slot.get("day_of_week", 0)]
+                subject = slot.get("subject_code", "Unknown")
+                start = slot.get("start_time", "?")
+
+                # Store pending edit
+                context.user_data["pending_edit"] = {
+                    "type": "schedule",
+                    "id": slot_id,
+                    "field": "room",  # Default to room
+                    "new_value": new_value,
+                    "description": f"{subject} ({day_name} {start})"
+                }
+
+                old_room = slot.get("room", "Not set")
+                await update.message.reply_text(
+                    f"Edit {subject} ({day_name} {start})?\n"
+                    f"Change room from '{old_room}' to '{new_value}'?\n\n"
+                    "Reply 'yes' to confirm or 'no' to cancel."
+                )
+            else:
+                await update.message.reply_text(f"No schedule found for subject '{subject_code}'.")
+        else:
+            await update.message.reply_text("Please specify a subject code.")
+
+    elif intent == Intent.EDIT_ASSIGNMENT:
+        # Natural language assignment edit
+        item_id = entities.item_id
+        new_value = entities.title  # New value stored in title
+        if item_id:
+            assignment = db.get_assignment_by_id(item_id)
+            if assignment:
+                title = assignment.get("title", "Unknown")
+                old_due = assignment.get("due_date", "Not set")
+
+                context.user_data["pending_edit"] = {
+                    "type": "assignment",
+                    "id": item_id,
+                    "field": "due",
+                    "new_value": new_value,
+                    "description": title
+                }
+
+                await update.message.reply_text(
+                    f"Edit assignment '{title}'?\n"
+                    f"Change due date from '{old_due}' to '{new_value}'?\n\n"
+                    "Reply 'yes' to confirm or 'no' to cancel."
+                )
+            else:
+                await update.message.reply_text(f"Assignment #{item_id} not found.")
+        else:
+            await update.message.reply_text("Please specify an assignment ID.")
+
+    elif intent == Intent.SET_ONLINE:
+        # Natural language set online
+        subject_input = entities.subject_code
+        time_part = entities.title  # Contains week# or date
+
+        if subject_input and time_part:
+            # Determine subject (None means all)
+            if subject_input.upper() == "ALL":
+                subject = None
+            else:
+                # Try to resolve subject name to code using aliases
+                aliases = db.get_subject_aliases()
+                subject = aliases.get(subject_input.lower(), subject_input.upper())
+
+            # Parse time part
+            week_number = None
+            specific_date = None
+
+            if "week" in time_part.lower():
+                try:
+                    week_number = int(time_part.lower().replace("week", "").strip())
+                except ValueError:
+                    await update.message.reply_text("Invalid week number.")
+                    return
+            elif time_part.lower() == "tomorrow":
+                from datetime import timedelta
+                tomorrow = get_today() + timedelta(days=1)
+                specific_date = tomorrow.isoformat()
+            elif time_part.lower() == "today":
+                specific_date = get_today().isoformat()
+            else:
+                specific_date = time_part
+
+            db.add_online_override(
+                subject_code=subject,
+                week_number=week_number,
+                specific_date=specific_date
+            )
+
+            subject_display = subject or "ALL classes"
+            if week_number:
+                await update.message.reply_text(
+                    f"Set {subject_display} as online for Week {week_number}."
+                )
+            else:
+                await update.message.reply_text(
+                    f"Set {subject_display} as online on {specific_date}."
+                )
+        else:
+            await update.message.reply_text(
+                "Please specify a subject and time. Example: 'set class BITP1113 online on week 12'"
+            )
+
+    elif intent == Intent.QUERY_ONLINE:
+        await online_command(update, context)
 
     elif intent == Intent.QUERY_ASSIGNMENTS:
         await assignments_command(update, context)
@@ -702,6 +1097,7 @@ def register_handlers(application: Application) -> None:
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("status", status_command))
     application.add_handler(CommandHandler("tomorrow", tomorrow_command))
+    application.add_handler(CommandHandler("today", today_command))
     application.add_handler(CommandHandler("week", week_command))
     application.add_handler(CommandHandler("week_number", week_number_command))
     application.add_handler(CommandHandler("offday", offday_command))
@@ -709,6 +1105,9 @@ def register_handlers(application: Application) -> None:
     application.add_handler(CommandHandler("tasks", tasks_command))
     application.add_handler(CommandHandler("todos", todos_command))
     application.add_handler(CommandHandler("done", done_command))
+    application.add_handler(CommandHandler("edit", edit_command))
+    application.add_handler(CommandHandler("online", online_command))
+    application.add_handler(CommandHandler("setonline", setonline_command))
 
     # Debug commands
     application.add_handler(CommandHandler("setdate", setdate_command))

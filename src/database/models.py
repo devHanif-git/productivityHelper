@@ -82,6 +82,15 @@ CREATE TABLE IF NOT EXISTS todos (
     reminded INTEGER DEFAULT 0,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Online class overrides (per-class or global online settings by week/date)
+CREATE TABLE IF NOT EXISTS online_overrides (
+    id INTEGER PRIMARY KEY,
+    subject_code TEXT,
+    week_number INTEGER,
+    specific_date TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 

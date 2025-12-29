@@ -191,6 +191,99 @@ class DatabaseOperations:
         finally:
             conn.close()
 
+    def get_schedule_by_id(self, slot_id: int) -> Optional[dict]:
+        """Get a specific schedule slot by ID."""
+        conn = self._get_conn()
+        try:
+            cursor = conn.execute(
+                "SELECT * FROM schedule WHERE id = ?",
+                (slot_id,)
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
+    def get_schedule_by_subject(self, search: str) -> list[dict]:
+        """
+        Find schedule slots by subject code OR subject name (fuzzy match).
+        Returns all matching slots (could be multiple for same subject on different days).
+        """
+        conn = self._get_conn()
+        try:
+            search_upper = search.upper()
+            search_pattern = f"%{search}%"
+            cursor = conn.execute(
+                """SELECT * FROM schedule
+                   WHERE subject_code LIKE ? OR subject_name LIKE ?
+                   ORDER BY day_of_week, start_time""",
+                (search_pattern, search_pattern)
+            )
+            return [dict(row) for row in cursor.fetchall()]
+        finally:
+            conn.close()
+
+    def get_subject_aliases(self) -> dict:
+        """
+        Build a mapping of subject name aliases to subject codes.
+        Returns dict like {"database design": "BITI1113", "programming": "BITP1113"}
+        """
+        conn = self._get_conn()
+        try:
+            cursor = conn.execute(
+                "SELECT DISTINCT subject_code, subject_name FROM schedule"
+            )
+            aliases = {}
+            for row in cursor.fetchall():
+                code = row["subject_code"]
+                name = row["subject_name"]
+                if code:
+                    aliases[code.lower()] = code
+                if name:
+                    # Add full name and common abbreviations
+                    aliases[name.lower()] = code
+                    # Add first letters as alias (e.g., "dbd" for "Database Design")
+                    words = name.split()
+                    if len(words) > 1:
+                        abbrev = "".join(w[0].lower() for w in words if w)
+                        aliases[abbrev] = code
+            return aliases
+        finally:
+            conn.close()
+
+    def update_schedule_slot(
+        self,
+        slot_id: int,
+        room: str = None,
+        lecturer_name: str = None,
+        subject_name: str = None
+    ) -> bool:
+        """Update a schedule slot. Only updates non-None fields."""
+        conn = self._get_conn()
+        try:
+            updates = []
+            params = []
+            if room is not None:
+                updates.append("room = ?")
+                params.append(room)
+            if lecturer_name is not None:
+                updates.append("lecturer_name = ?")
+                params.append(lecturer_name)
+            if subject_name is not None:
+                updates.append("subject_name = ?")
+                params.append(subject_name)
+
+            if not updates:
+                return False
+
+            params.append(slot_id)
+            query = f"UPDATE schedule SET {', '.join(updates)} WHERE id = ?"
+            conn.execute(query, tuple(params))
+            conn.commit()
+            return True
+        finally:
+            conn.close()
+
     # ==================== Assignments ====================
 
     def add_assignment(
@@ -455,6 +548,43 @@ class DatabaseOperations:
         finally:
             conn.close()
 
+    def update_assignment(
+        self,
+        assignment_id: int,
+        title: str = None,
+        due_date: str = None,
+        subject_code: str = None,
+        description: str = None
+    ) -> bool:
+        """Update an assignment. Only updates non-None fields."""
+        conn = self._get_conn()
+        try:
+            updates = []
+            params = []
+            if title is not None:
+                updates.append("title = ?")
+                params.append(title)
+            if due_date is not None:
+                updates.append("due_date = ?")
+                params.append(due_date)
+            if subject_code is not None:
+                updates.append("subject_code = ?")
+                params.append(subject_code)
+            if description is not None:
+                updates.append("description = ?")
+                params.append(description)
+
+            if not updates:
+                return False
+
+            params.append(assignment_id)
+            query = f"UPDATE assignments SET {', '.join(updates)} WHERE id = ?"
+            conn.execute(query, tuple(params))
+            conn.commit()
+            return True
+        finally:
+            conn.close()
+
     def get_task_by_id(self, task_id: int) -> Optional[dict]:
         """Get a specific task by ID."""
         conn = self._get_conn()
@@ -570,5 +700,104 @@ class DatabaseOperations:
             counts["todos"] = cursor.fetchone()[0]
 
             return counts
+        finally:
+            conn.close()
+
+    # ==================== Online Overrides ====================
+
+    def add_online_override(
+        self,
+        subject_code: str = None,
+        week_number: int = None,
+        specific_date: str = None
+    ) -> int:
+        """
+        Add an online override. Returns the new ID.
+        - subject_code=None means ALL classes
+        - Either week_number OR specific_date should be set
+        """
+        conn = self._get_conn()
+        try:
+            cursor = conn.execute(
+                """INSERT INTO online_overrides
+                   (subject_code, week_number, specific_date)
+                   VALUES (?, ?, ?)""",
+                (subject_code, week_number, specific_date)
+            )
+            conn.commit()
+            return cursor.lastrowid
+        finally:
+            conn.close()
+
+    def get_online_overrides(self) -> list[dict]:
+        """Get all online overrides."""
+        conn = self._get_conn()
+        try:
+            cursor = conn.execute(
+                "SELECT * FROM online_overrides ORDER BY week_number, specific_date"
+            )
+            return [dict(row) for row in cursor.fetchall()]
+        finally:
+            conn.close()
+
+    def is_class_online(
+        self,
+        subject_code: str,
+        check_date: str = None,
+        week_number: int = None
+    ) -> bool:
+        """Check if a class is online for a given date or week."""
+        conn = self._get_conn()
+        try:
+            # Check subject-specific overrides
+            if check_date:
+                cursor = conn.execute(
+                    """SELECT COUNT(*) FROM online_overrides
+                       WHERE (subject_code = ? OR subject_code IS NULL)
+                       AND specific_date = ?""",
+                    (subject_code, check_date)
+                )
+                if cursor.fetchone()[0] > 0:
+                    return True
+
+            if week_number:
+                cursor = conn.execute(
+                    """SELECT COUNT(*) FROM online_overrides
+                       WHERE (subject_code = ? OR subject_code IS NULL)
+                       AND week_number = ?""",
+                    (subject_code, week_number)
+                )
+                if cursor.fetchone()[0] > 0:
+                    return True
+
+            return False
+        finally:
+            conn.close()
+
+    def get_next_online_week(self) -> Optional[dict]:
+        """Get the next online override (week-based)."""
+        conn = self._get_conn()
+        try:
+            cursor = conn.execute(
+                """SELECT * FROM online_overrides
+                   WHERE week_number IS NOT NULL
+                   ORDER BY week_number
+                   LIMIT 1"""
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
+    def delete_online_override(self, override_id: int) -> bool:
+        """Delete an online override."""
+        conn = self._get_conn()
+        try:
+            conn.execute(
+                "DELETE FROM online_overrides WHERE id = ?",
+                (override_id,)
+            )
+            conn.commit()
+            return True
         finally:
             conn.close()

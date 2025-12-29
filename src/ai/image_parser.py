@@ -107,13 +107,17 @@ INCLUDE these event types:
 - Cuti Ulang Kaji (Study leave/revision week)
 - Pendaftaran Kursus (Course registration)
 
-EXCLUDE these (staff/admin items):
+EXCLUDE these (staff/admin items, irrelevant to continuing students):
 - Mesyuarat Senat
 - Mesyuarat Jawatankuasa Tetap Senat
 - Latihan Industri Pelajar
 - Pendaftaran Lewat Berdenda Pelajar Kanan
 - Keputusan Peperiksaan administrative items
 - Any meeting or committee items
+- Pendaftaran Pelajar Baharu (new student registration)
+- Pendaftaran Kursus Pelajar Baharu (new student course registration)
+- Minggu Harian Siswa (student activity week)
+- Any items with "Pelajar Baharu" (new students only)
 
 Return as JSON array with this structure:
 [
@@ -145,8 +149,22 @@ For affects_classes:
         logger.error("Invalid calendar parsing response format")
         return []
 
+    # Blocklist for events we don't want (filter at code level as backup)
+    EVENT_BLOCKLIST = [
+        "pelajar baharu",
+        "harian siswa",
+        "minggu harian",
+        "pendaftaran pelajar baharu",
+        "pendaftaran kursus pelajar baharu",
+    ]
+
     events = []
     for item in data:
+        # Check if event should be filtered out
+        event_name = (item.get("name", "") + " " + (item.get("name_en") or "")).lower()
+        if any(blocked in event_name for blocked in EVENT_BLOCKLIST):
+            logger.info(f"Filtering out event: {item.get('name', 'Unknown')}")
+            continue
         try:
             event = AcademicEvent(
                 event_type=item.get("event_type", "unknown"),

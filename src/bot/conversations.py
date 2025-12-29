@@ -392,6 +392,54 @@ def format_tomorrow_classes(schedule: list[dict], events: list[dict], today: dat
     return "\n".join(lines)
 
 
+def format_today_classes(schedule: list[dict], events: list[dict], today: date = None) -> str:
+    """Format today's classes for display."""
+    if today is None:
+        today = date.today()
+    day_of_week = today.weekday()
+
+    # Check for events affecting today
+    today_iso = today.isoformat()
+    for event in events:
+        start = event.get("start_date", "")
+        end = event.get("end_date") or start
+        if start <= today_iso <= end and event.get("affects_classes"):
+            event_name = event.get("name_en") or event.get("name", "")
+            return f"Today is {event_name} - No classes!"
+
+    # Check if weekend
+    if day_of_week >= 5:  # Saturday or Sunday
+        return f"Today is {DAY_NAMES[day_of_week]} - No classes on weekends!"
+
+    # Filter classes for today
+    today_classes = [s for s in schedule if s.get("day_of_week") == day_of_week]
+
+    if not today_classes:
+        return f"No classes today ({DAY_NAMES[day_of_week]})!"
+
+    # Sort by start time
+    today_classes.sort(key=lambda x: x.get("start_time", ""))
+
+    lines = [f"Today ({DAY_NAMES[day_of_week]}):"]
+    for cls in today_classes:
+        start = format_time(cls.get("start_time", ""))
+        end = format_time(cls.get("end_time", ""))
+        subject = cls.get("subject_code", "")
+        class_type = cls.get("class_type", "LEC")
+        room = cls.get("room", "")
+        lecturer = cls.get("lecturer_name", "")
+
+        line = f"- {subject} {start}-{end} ({class_type}"
+        if room:
+            line += f", {room}"
+        if lecturer:
+            line += f", {lecturer}"
+        line += ")"
+        lines.append(line)
+
+    return "\n".join(lines)
+
+
 def format_week_schedule(schedule: list[dict]) -> str:
     """Format the full week schedule for display."""
     if not schedule:
@@ -433,7 +481,8 @@ def format_pending_assignments(assignments: list[dict]) -> str:
         return "No pending assignments!"
 
     lines = [f"{len(assignments)} pending assignment(s):"]
-    for i, a in enumerate(assignments, 1):
+    for a in assignments:
+        item_id = a.get("id", "?")
         title = a.get("title", "Untitled")
         subject = a.get("subject_code", "")
         due = a.get("due_date", "")
@@ -448,7 +497,7 @@ def format_pending_assignments(assignments: list[dict]) -> str:
         else:
             due_str = "No due date"
 
-        line = f"{i}. {title}"
+        line = f"[ID:{item_id}] {title}"
         if subject:
             line += f" ({subject})"
         line += f" - due {due_str}"
@@ -463,13 +512,14 @@ def format_pending_tasks(tasks: list[dict]) -> str:
         return "No upcoming tasks!"
 
     lines = [f"{len(tasks)} upcoming task(s):"]
-    for i, t in enumerate(tasks, 1):
+    for t in tasks:
+        item_id = t.get("id", "?")
         title = t.get("title", "Untitled")
         date_str = t.get("scheduled_date", "")
         time_str = t.get("scheduled_time", "")
         location = t.get("location", "")
 
-        line = f"{i}. {title}"
+        line = f"[ID:{item_id}] {title}"
         if date_str:
             try:
                 d = datetime.fromisoformat(date_str).date()
@@ -491,12 +541,13 @@ def format_pending_todos(todos: list[dict]) -> str:
         return "No pending TODOs!"
 
     lines = [f"{len(todos)} pending TODO(s):"]
-    for i, t in enumerate(todos, 1):
+    for t in todos:
+        item_id = t.get("id", "?")
         title = t.get("title", "Untitled")
         date_str = t.get("scheduled_date", "")
         time_str = t.get("scheduled_time", "")
 
-        line = f"{i}. {title}"
+        line = f"[ID:{item_id}] {title}"
         if date_str:
             line += f" ({date_str})"
         if time_str:

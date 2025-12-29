@@ -32,6 +32,7 @@ class Intent(Enum):
     COMPLETE_TODO = "complete_todo"
 
     # Schedule Queries
+    QUERY_TODAY_CLASSES = "query_today"
     QUERY_TOMORROW_CLASSES = "query_tomorrow"
     QUERY_WEEK_CLASSES = "query_week"
     QUERY_SUBJECT_SCHEDULE = "query_subject"
@@ -40,7 +41,18 @@ class Intent(Enum):
     QUERY_CURRENT_WEEK = "query_current_week"
     QUERY_NEXT_WEEK = "query_next_week"
     QUERY_NEXT_OFFDAY = "query_next_offday"
+    QUERY_MIDTERM_BREAK = "query_midterm_break"
+    QUERY_FINAL_EXAM = "query_final_exam"
+    QUERY_MIDTERM_EXAM = "query_midterm_exam"
     QUERY_SEMESTER_DATES = "query_semester"
+
+    # Editing
+    EDIT_SCHEDULE = "edit_schedule"
+    EDIT_ASSIGNMENT = "edit_assignment"
+
+    # Online Mode
+    SET_ONLINE = "set_online"
+    QUERY_ONLINE = "query_online"
 
     # Image Upload
     UPLOAD_ASSIGNMENT_IMAGE = "upload_assignment"
@@ -264,12 +276,114 @@ async def classify_message(message: str) -> ClassificationResult:
             confidence=0.95
         )
 
-    # Class queries
+    # Class queries - Tomorrow
     if re.search(r"(what|any)\s+(class|classes)\s+tomorrow", message_lower):
         return ClassificationResult(
             intent=Intent.QUERY_TOMORROW_CLASSES,
             entities=ParsedEntities(),
             confidence=0.95
+        )
+
+    # Class queries - Today (English and Malay)
+    if re.search(r"(what|any)\s+(class|classes|is\s+my\s+schedule)\s+today", message_lower):
+        return ClassificationResult(
+            intent=Intent.QUERY_TODAY_CLASSES,
+            entities=ParsedEntities(),
+            confidence=0.95
+        )
+    if re.search(r"(do\s+i\s+have|ada)\s+(class|classes|kelas)\s+today", message_lower):
+        return ClassificationResult(
+            intent=Intent.QUERY_TODAY_CLASSES,
+            entities=ParsedEntities(),
+            confidence=0.95
+        )
+    if re.search(r"kelas\s+(hari\s+)?ini", message_lower):
+        return ClassificationResult(
+            intent=Intent.QUERY_TODAY_CLASSES,
+            entities=ParsedEntities(),
+            confidence=0.95
+        )
+    if re.search(r"jadual\s+hari\s+ini", message_lower):
+        return ClassificationResult(
+            intent=Intent.QUERY_TODAY_CLASSES,
+            entities=ParsedEntities(),
+            confidence=0.95
+        )
+
+    # Midterm break query (English and Malay)
+    if re.search(r"(when|bila).*(mid\s*term\s*break|cuti\s*pertengahan|mid\s*semester\s*break)", message_lower):
+        return ClassificationResult(
+            intent=Intent.QUERY_MIDTERM_BREAK,
+            entities=ParsedEntities(),
+            confidence=0.95
+        )
+
+    # Final exam query (English and Malay)
+    if re.search(r"(when|bila).*(final\s*exam|peperiksaan\s*akhir|final\s*test)", message_lower):
+        return ClassificationResult(
+            intent=Intent.QUERY_FINAL_EXAM,
+            entities=ParsedEntities(),
+            confidence=0.95
+        )
+
+    # Midterm exam query (English and Malay)
+    if re.search(r"(when|bila).*(mid\s*term\s*exam|ujian\s*pertengahan|mid\s*semester\s*exam|mid\s*term\s*test)", message_lower):
+        return ClassificationResult(
+            intent=Intent.QUERY_MIDTERM_EXAM,
+            entities=ParsedEntities(),
+            confidence=0.95
+        )
+
+    # Edit schedule patterns (e.g., "change BITP1113 room to BK12", "update class room")
+    edit_schedule_match = re.search(
+        r"(change|update|edit|tukar)\s+(\w+)\s*(class|kelas)?\s*(room|bilik|lecturer|pensyarah)\s+(to|ke|kepada)\s+(.+)",
+        message_lower
+    )
+    if edit_schedule_match:
+        subject = edit_schedule_match.group(2).upper()
+        field = edit_schedule_match.group(4)
+        new_value = edit_schedule_match.group(6).strip()
+        return ClassificationResult(
+            intent=Intent.EDIT_SCHEDULE,
+            entities=ParsedEntities(subject_code=subject, title=new_value),
+            confidence=0.90
+        )
+
+    # Edit assignment patterns (e.g., "update assignment 1 due to Friday")
+    edit_assignment_match = re.search(
+        r"(change|update|edit|tukar)\s+assignment\s+(\d+)\s+(due|title|tajuk)\s+(to|ke|kepada)\s+(.+)",
+        message_lower
+    )
+    if edit_assignment_match:
+        item_id = int(edit_assignment_match.group(2))
+        field = edit_assignment_match.group(3)
+        new_value = edit_assignment_match.group(5).strip()
+        return ClassificationResult(
+            intent=Intent.EDIT_ASSIGNMENT,
+            entities=ParsedEntities(item_id=item_id, title=new_value),
+            confidence=0.90
+        )
+
+    # Set online patterns (e.g., "set class BITP1113 online on week 12")
+    set_online_match = re.search(
+        r"set\s+(class\s+)?(\w+|all)\s+online\s+(on\s+|for\s+)?(week\s*\d+|tomorrow|today|\d{4}-\d{2}-\d{2})",
+        message_lower
+    )
+    if set_online_match:
+        subject = set_online_match.group(2).upper()
+        time_part = set_online_match.group(4)
+        return ClassificationResult(
+            intent=Intent.SET_ONLINE,
+            entities=ParsedEntities(subject_code=subject, title=time_part),
+            confidence=0.90
+        )
+
+    # Query online patterns
+    if re.search(r"(what|which|show).*(online|dalam\s*talian)", message_lower):
+        return ClassificationResult(
+            intent=Intent.QUERY_ONLINE,
+            entities=ParsedEntities(),
+            confidence=0.90
         )
 
     # Assignment queries

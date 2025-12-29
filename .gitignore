@@ -59,6 +59,6 @@ backups/
 *.db.gz
 
 # AI
-CLAUDE.md
-Testing.md
-Implementation_Plan.md
+#CLAUDE.md
+#Testing.md
+#Implementation_Plan.md
