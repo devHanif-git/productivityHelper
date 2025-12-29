@@ -13,6 +13,7 @@ import pytz
 
 from ..config import config
 from ..database.operations import DatabaseOperations
+from ..bot.handlers import get_today, get_now
 from ..utils.semester_logic import (
     get_current_week,
     is_class_day,
@@ -171,7 +172,7 @@ class NotificationScheduler:
             logger.info("No users to notify")
             return
 
-        tomorrow = date.today() + timedelta(days=1)
+        tomorrow = get_today() + timedelta(days=1)
         events = db.get_all_events()
 
         # Check if tomorrow has classes
@@ -184,11 +185,7 @@ class NotificationScheduler:
         day_of_week = tomorrow.weekday()
         schedule = db.get_schedule_for_day(day_of_week)
 
-        if not schedule:
-            logger.info("No classes scheduled for tomorrow")
-            return
-
-        # Format message
+        # Format message (handles both with classes and no classes)
         message = self._format_class_briefing(tomorrow, schedule)
 
         # Send to all users
@@ -198,6 +195,15 @@ class NotificationScheduler:
     def _format_class_briefing(self, tomorrow: date, schedule: list[dict]) -> str:
         """Format the class briefing message."""
         day_name = DAY_NAMES[tomorrow.weekday()]
+
+        # Handle no classes scheduled
+        if not schedule:
+            return (
+                f"📚 Tomorrow ({day_name}, {tomorrow.strftime('%d %b')})\n\n"
+                f"No classes on your timetable!\n"
+                f"Enjoy your free day 🎉"
+            )
+
         lines = [f"📚 Classes Tomorrow ({day_name}, {tomorrow.strftime('%d %b')}):\n"]
 
         # Sort by start time
@@ -228,7 +234,7 @@ class NotificationScheduler:
         if not chat_ids:
             return
 
-        tomorrow = date.today() + timedelta(days=1)
+        tomorrow = get_today() + timedelta(days=1)
         events = db.get_all_events()
 
         # Check if tomorrow is an off day
@@ -329,7 +335,7 @@ class NotificationScheduler:
         logger.info("Checking assignment reminders")
 
         assignments = db.get_pending_assignments()
-        now = datetime.now(MY_TZ)
+        now = get_now()
 
         for assignment in assignments:
             due_date_str = assignment.get("due_date")
@@ -395,7 +401,7 @@ class NotificationScheduler:
         logger.info("Checking task reminders")
 
         tasks = db.get_upcoming_tasks(days=7)
-        now = datetime.now(MY_TZ)
+        now = get_now()
         today = now.date()
 
         for task in tasks:
@@ -461,7 +467,7 @@ class NotificationScheduler:
         logger.info("Checking TODO reminders")
 
         todos = db.get_pending_todos()
-        now = datetime.now(MY_TZ)
+        now = get_now()
         today = now.date()
 
         for todo in todos:
@@ -517,7 +523,7 @@ class NotificationScheduler:
         logger.info("Checking for semester starting notification")
 
         events = db.get_all_events()
-        today = date.today()
+        today = get_today()
 
         # Get inter-semester break
         _, inter_break = get_all_breaks(events)

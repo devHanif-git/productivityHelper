@@ -45,6 +45,25 @@ A Telegram bot that helps UTeM students manage their academic schedule, assignme
 | `/todos` | List pending TODOs |
 | `/done <type> <id>` | Mark item as complete |
 
+### Debug/Testing Commands
+
+| Command | Description |
+|---------|-------------|
+| `/setdate YYYY-MM-DD` | Set test date override |
+| `/resetdate` | Reset to real system date |
+| `/settime HH:MM` | Set test time override (24-hour format) |
+| `/resettime` | Reset to real system time |
+| `/trigger <type>` | Manually trigger a notification |
+
+**Available trigger types:**
+- `briefing` - 10PM class briefing
+- `offday` - 8PM off-day alert
+- `midnight` - 12AM TODO review
+- `assignments` - Assignment reminder check
+- `tasks` - Task reminder check
+- `todos` - TODO reminder check
+- `semester` - Semester starting notification
+
 ## Tech Stack
 
 | Component | Technology |

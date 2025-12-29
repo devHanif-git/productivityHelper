@@ -2,13 +2,18 @@
 
 import logging
 import os
-from datetime import date, datetime
+from datetime import date, datetime, time
 
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
+import pytz
 
-# Debug: Test date override (set via /setdate command or TEST_DATE env var)
+# Malaysia timezone
+MY_TZ = pytz.timezone("Asia/Kuala_Lumpur")
+
+# Debug: Test date/time override (set via /setdate and /settime commands)
 _test_date_override: date = None
+_test_time_override: time = None
 
 
 def get_today() -> date:
@@ -24,6 +29,31 @@ def get_today() -> date:
         except ValueError:
             pass
     return date.today()
+
+
+def get_now() -> datetime:
+    """Get current datetime (or test datetime if set for debugging)."""
+    global _test_date_override, _test_time_override
+
+    # Get the date part
+    current_date = get_today()
+
+    # Get the time part
+    if _test_time_override:
+        current_time = _test_time_override
+    else:
+        env_time = os.getenv("TEST_TIME")
+        if env_time:
+            try:
+                current_time = datetime.strptime(env_time, "%H:%M").time()
+            except ValueError:
+                current_time = datetime.now(MY_TZ).time()
+        else:
+            current_time = datetime.now(MY_TZ).time()
+
+    # Combine date and time
+    result = datetime.combine(current_date, current_time)
+    return MY_TZ.localize(result)
 
 from ..config import config
 from ..database.operations import DatabaseOperations
@@ -121,6 +151,13 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 *Management*
 /done <id> - Mark item as complete
 /help - Show this help message
+
+*Debug/Testing*
+/setdate YYYY-MM-DD - Set test date
+/resetdate - Reset to real date
+/settime HH:MM - Set test time (24h)
+/resettime - Reset to real time
+/trigger <type> - Trigger notification manually
 
 You can also send me natural language messages like:
 • "I have assignment report for BITP1113 due Friday 5pm"
@@ -549,6 +586,112 @@ async def resetdate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     )
 
 
+async def settime_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /settime command - set a test time for debugging."""
+    global _test_time_override
+
+    args = context.args
+    if not args:
+        current_dt = get_now()
+        is_override = _test_time_override is not None
+        await update.message.reply_text(
+            f"Current time: {current_dt.strftime('%H:%M')}\n"
+            f"{'(Test time override active)' if is_override else '(Real time)'}\n\n"
+            "Usage: /settime HH:MM\n"
+            "Example: /settime 21:55 (for 9:55 PM)"
+        )
+        return
+
+    try:
+        test_time = datetime.strptime(args[0], "%H:%M").time()
+        _test_time_override = test_time
+        await update.message.reply_text(
+            f"Test time set to: {test_time.strftime('%H:%M')}\n"
+            "All time-based commands will use this time.\n"
+            "Use /resettime to go back to real time.\n\n"
+            f"Current test datetime: {get_now().strftime('%Y-%m-%d %H:%M')}"
+        )
+    except ValueError:
+        await update.message.reply_text(
+            "Invalid time format. Use HH:MM (24-hour)\n"
+            "Example: /settime 21:55"
+        )
+
+
+async def resettime_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /resettime command - reset to real time."""
+    global _test_time_override
+    _test_time_override = None
+    await update.message.reply_text(
+        f"Time reset to real time: {datetime.now(MY_TZ).strftime('%H:%M')}"
+    )
+
+
+async def trigger_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /trigger command - manually trigger a notification for testing."""
+    from ..scheduler.notifications import get_scheduler
+    from ..utils.semester_logic import is_class_day
+    from datetime import timedelta
+
+    args = context.args
+    valid_triggers = {
+        "briefing": "send_class_briefing",
+        "offday": "send_offday_alert",
+        "midnight": "send_midnight_todo_review",
+        "assignments": "check_assignment_reminders",
+        "tasks": "check_task_reminders",
+        "todos": "check_todo_reminders",
+        "semester": "check_semester_starting",
+    }
+
+    if not args:
+        trigger_list = "\n".join(f"  • {name}" for name in valid_triggers.keys())
+        await update.message.reply_text(
+            f"Usage: /trigger <notification_type>\n\n"
+            f"Available triggers:\n{trigger_list}\n\n"
+            f"Example: /trigger briefing"
+        )
+        return
+
+    trigger_name = args[0].lower()
+    if trigger_name not in valid_triggers:
+        await update.message.reply_text(
+            f"Unknown trigger: {trigger_name}\n"
+            f"Valid options: {', '.join(valid_triggers.keys())}"
+        )
+        return
+
+    try:
+        scheduler = get_scheduler(context.bot)
+
+        # Debug info before triggering
+        chat_ids = await scheduler._get_all_chat_ids()
+        tomorrow = get_today() + timedelta(days=1)
+        events = db.get_all_events()
+        day_of_week = tomorrow.weekday()
+        schedule = db.get_schedule_for_day(day_of_week)
+        is_class = is_class_day(tomorrow, events)
+
+        debug_info = (
+            f"Debug Info:\n"
+            f"• Test datetime: {get_now().strftime('%Y-%m-%d %H:%M')}\n"
+            f"• Tomorrow: {tomorrow} ({['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][day_of_week]})\n"
+            f"• Registered chat_ids: {chat_ids or 'None'}\n"
+            f"• Is class day: {is_class}\n"
+            f"• Classes scheduled: {len(schedule) if schedule else 0}\n"
+        )
+
+        await update.message.reply_text(f"Triggering {trigger_name}...\n\n{debug_info}")
+
+        method_name = valid_triggers[trigger_name]
+        method = getattr(scheduler, method_name)
+        await method()
+
+        await update.message.reply_text(f"Done! Check if you received the notification.")
+    except Exception as e:
+        await update.message.reply_text(f"Error triggering {trigger_name}: {e}")
+
+
 def register_handlers(application: Application) -> None:
     """Register all command handlers with the application."""
     # Add onboarding conversation handler first (higher priority)
@@ -570,6 +713,9 @@ def register_handlers(application: Application) -> None:
     # Debug commands
     application.add_handler(CommandHandler("setdate", setdate_command))
     application.add_handler(CommandHandler("resetdate", resetdate_command))
+    application.add_handler(CommandHandler("settime", settime_command))
+    application.add_handler(CommandHandler("resettime", resettime_command))
+    application.add_handler(CommandHandler("trigger", trigger_command))
 
     # Message handlers (lower priority than commands)
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo_message))

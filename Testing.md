@@ -174,30 +174,30 @@ Before testing, ensure:
 ### Test Q: Academic Calendar
 | Step | Action | Expected Result | Pass? |
 |------|--------|-----------------|-------|
-| Q1 | Send UTeM calendar image | Detects as "calendar" | [ ] |
-| Q2 | Check extracted events | Holidays, breaks, exams listed | [ ] |
-| Q3 | Verify filtering | No "Mesyuarat Senat" or admin items | [ ] |
+| Q1 | Send UTeM calendar image | Detects as "calendar" | [x] |
+| Q2 | Check extracted events | Holidays, breaks, exams listed | [x] |
+| Q3 | Verify filtering | No "Mesyuarat Senat" or admin items | [x] |
 
 ### Test R: Class Timetable
 | Step | Action | Expected Result | Pass? |
 |------|--------|-----------------|-------|
-| R1 | Send timetable image | Detects as "timetable" | [ ] |
-| R2 | Check extracted data | Day, time, subject, room, lecturer | [ ] |
-| R3 | Verify class types | LEC and LAB distinguished | [ ] |
+| R1 | Send timetable image | Detects as "timetable" | [x] |
+| R2 | Check extracted data | Day, time, subject, room, lecturer | [x] |
+| R3 | Verify class types | LEC and LAB distinguished | [x] |
 
 ### Test S: Assignment Sheet
 | Step | Action | Expected Result | Pass? |
 |------|--------|-----------------|-------|
-| S1 | Send assignment sheet photo | Detects as "assignment" | [ ] |
-| S2 | Check extraction | Title, subject, due date shown | [ ] |
-| S3 | Confirm "yes" | Saved to database | [ ] |
-| S4 | Try "no" | Cancelled, not saved | [ ] |
+| S1 | Send assignment sheet photo | Detects as "assignment" | [x] |
+| S2 | Check extraction | Title, subject, due date shown | [x] |
+| S3 | Confirm "yes" | Saved to database | [x] |
+| S4 | Try "no" | Cancelled, not saved | [x] |
 
 ### Test T: Unknown Images
 | Step | Action | Expected Result | Pass? |
 |------|--------|-----------------|-------|
-| T1 | Send selfie or random photo | "Couldn't determine type" | [ ] |
-| T2 | Send blurry image | Error or retry message | [ ] |
+| T1 | Send selfie or random photo | "Couldn't determine type" | [x] |
+| T2 | Send blurry image | Error or retry message | [x] |
 
 ---
 
@@ -249,8 +249,8 @@ Create assignment with due date at different intervals:
 ### Test Y: API Errors
 | Step | How to Simulate | Expected Result | Pass? |
 |------|-----------------|-----------------|-------|
-| Y1 | Use invalid Gemini API key | Graceful error message | [ ] |
-| Y2 | Disconnect internet, send image | Network error message | [ ] |
+| Y1 | Use invalid Gemini API key | Graceful error message | [x] |
+| Y2 | Disconnect internet, send image | Network error message | [x] |
 
 ---
 
@@ -375,7 +375,7 @@ What todos left?
 ---
 
 ## Known Bugs (not fix yet)
-- when send /done it say marks as done but not not remove from list
+- when send /done it say marks as done but not not remove from list (mby delay because later on when i check again it remove, or mby i restart the bot that why)
 - when use /assignment, /todos, /tasks it show data but not [ID:] because it being filter so i thought its id 1, when i update it, its not.
 - 
 
@@ -390,3 +390,5 @@ What todos left?
 - can use /online to search next online lecture week or something like that.
 - can set class to online mode, like "set class Programming technique online on week 12". or "set class dbd (database design) online tomorrow" or "set class dbd (database design) online today" or "set class dbd (database design) online today 10am" or "set class OS (operating system) online today next week. or on * date" and something like that. you may suggest.
 - mby instead of using "/" make it UI, so it better and more user friendly.
+- able to set important date like final exam date for certain subject, midterm exam date for certain subject, the mode, online or offline (or you think this is just on tasks/todos? no need special place?)
+- 
