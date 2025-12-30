@@ -14,6 +14,8 @@ from .keyboards import (
     get_main_menu_keyboard,
     get_settings_keyboard,
     get_language_keyboard,
+    get_initial_language_keyboard,
+    get_semester_keyboard,
     get_notification_settings_keyboard,
     get_item_actions_keyboard,
     get_confirmation_keyboard,
@@ -83,7 +85,7 @@ from ..ai.intent_parser import (
     build_task_from_entities,
     build_todo_from_entities,
 )
-from ..ai.image_parser import detect_image_type, parse_assignment_image
+from ..ai.image_parser import detect_image_type, parse_assignment_image, parse_academic_calendar, parse_timetable
 from ..utils.semester_logic import (
     get_current_week,
     get_next_week,
@@ -118,98 +120,276 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     chat_id = update.effective_chat.id
     user = update.effective_user
 
-    # Create user config if doesn't exist
+    # Check if new user
     existing = db.get_user_config(chat_id)
-    if not existing:
+    is_new_user = existing is None
+
+    if is_new_user:
+        # Create user config
         db.create_user_config(chat_id)
 
-    welcome_message = f"""
+        # Welcome message with language selection for new users
+        welcome_message = f"""
 Assalamualaikum {user.first_name}! 👋
 
 Welcome to UTeM Student Assistant Bot.
 
+Please select your preferred language:
+Sila pilih bahasa pilihan anda:
+"""
+        await update.message.reply_text(
+            welcome_message.strip(),
+            reply_markup=get_initial_language_keyboard()
+        )
+    else:
+        # Returning user - show welcome back message
+        user_config = db.get_user_config(chat_id)
+        lang = user_config.get("language", "en") if user_config else "en"
+
+        welcome_message = f"""
+Welcome back, {user.first_name}! 👋
+
 I can help you with:
-📅 Managing your class schedule
-📝 Tracking assignments with reminders
-✅ Tasks and TODO lists
+📅 Class schedule & week tracking
+📝 Assignment tracking with reminders
+✅ Tasks and TODO management
+🎤 Voice notes transcription
+📸 Image recognition (calendar, timetable, assignments)
+💡 AI-powered suggestions
 🔔 Daily briefings and notifications
 
-To get started:
-1. Send me your academic calendar image
-2. Send me your class timetable image
-
+Use /setup to configure your calendar and timetable.
 Use /help to see all available commands.
 """
-    await update.message.reply_text(welcome_message.strip())
+        await update.message.reply_text(
+            welcome_message.strip(),
+            reply_markup=get_main_menu_keyboard()
+        )
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /help command - show available commands."""
-    help_text = """
-*Available Commands*
+    args = context.args
 
-*Setup*
-/start - Start the bot and setup
-/menu - Show interactive menu
+    # Section-specific help
+    if args:
+        section = args[0].lower()
+        help_sections = {
+            "schedule": """
+*📅 Schedule Commands*
 
-*Schedule*
-/today - Show today's classes
-/tomorrow - Show tomorrow's classes
-/week - Show this week's schedule
-/schedule <subject> - Show schedule for subject
+/today - View today's classes
+/tomorrow - View tomorrow's classes
+/week - View full week schedule
+/schedule [subject] - View schedule for a subject
+/week_number - Current semester week
+/offday - Next off day/holiday
 
-*Academic*
-/week\\_number - Current week of semester
-/offday - Next off day / holiday
-/exams - List upcoming exams
-/setexam <subject> <type> <date> - Set exam date
+*💬 Natural Language:*
+• "What class tomorrow?" / "kelas esok?"
+• "harini ada kelas x?" / "today got class?"
+• "What week is this?" / "minggu ni minggu ke berapa?"
+• "When is mid term break?"
 
-*Tasks*
+*📆 Setup:*
+/setsemester YYYY-MM-DD - Set semester start date
+📸 Send calendar image → auto-import events
+📸 Send timetable image → auto-import schedule
+""",
+            "assignments": """
+*📝 Assignment Commands*
+
 /assignments - List pending assignments
-/tasks - List upcoming tasks
+/done assignment <id> - Mark as complete
+/edit assignment <id> due <date> - Change due date
+/delete assignment <id> - Delete assignment
+
+*💬 Add Assignment (Natural Language):*
+• "Assignment report BITP1113 due Friday 5pm"
+• "I have assignment for database due next Monday"
+• "BITP report submission tomorrow 11:59pm"
+
+*📸 Image:*
+Send an assignment sheet image → auto-extract details
+
+*🔔 Reminders:*
+Automatic reminders at: 3 days, 2 days, 1 day, 8h, 3h, 1h, and due time
+""",
+            "tasks": """
+*📋 Task Commands*
+
+/tasks - List upcoming tasks/meetings
+/done task <id> - Mark as complete
+/delete task <id> - Delete task
+
+*💬 Add Task (Natural Language):*
+• "Meet Dr Intan tomorrow 10am"
+• "Meeting with supervisor Friday 2pm at BK5"
+• "Consultation with lecturer next Monday"
+
+Tasks are for scheduled appointments and meetings.
+""",
+            "todos": """
+*✅ TODO Commands*
+
 /todos - List pending TODOs
+/done todo <id> - Mark as complete
+/delete todo <id> - Delete TODO
 
-*Status*
-/status - Overview of pending items
-/stats - View productivity statistics
-/search <query> - Search all data
+*💬 Add TODO (Natural Language):*
+• "Remind me buy groceries at 3pm"
+• "Take wife at Satria at 5pm"
+• "Call mum later"
+• "Print notes before class"
 
-*Management*
-/done <type> <id> - Mark item as complete
-/delete <type> <id> - Delete an item
-/edit <type> <id> <field> <value> - Edit item
-/undo - Undo last action
-/online - Show online class settings
-/setonline <subject|all> <week#|date> - Set class online
+TODOs are quick personal reminders.
+""",
+            "exams": """
+*📝 Exam Commands*
 
-*Voice Notes*
-Send voice message - Transcribe & process audio
+/exams - List upcoming exams
+/setexam <subject> <type> <date> [time]
+   Types: final, midterm, quiz, test, labtest
+
+*💬 Add Exam (Natural Language):*
+• "Lab test for OS next week on lab section"
+• "Quiz BITP1113 this Friday"
+• "Final exam database on 15 Jan 2025"
+
+System auto-finds the exam day/time from your schedule!
+""",
+            "voice": """
+*🎤 Voice Notes*
+
 /notes - List saved voice notes
 /notes <id> - View specific note
 /notes search <query> - Search notes
 
-*AI Features*
-/suggest - Get AI-powered suggestions
+*How to use:*
+1. Send a voice message (up to 30 min)
+2. Bot transcribes automatically
+3. Choose processing type:
+   📝 Summary - Condense key points
+   📋 Meeting Minutes - Format as minutes
+   ✅ Extract Tasks - Pull out action items
+   📚 Study Notes - Format for studying
+   💾 Save Transcript - Keep raw text
+   🎯 Smart Analysis - AI decides best format
+""",
+            "online": """
+*🖥️ Online Class Settings*
 
-*Settings*
-/settings - Open settings menu
-/mute <hours> - Mute notifications
-/language <en|my> - Set language
-/export - Export data
+/online - View online class settings
+/setonline <subject|all> <week#|date>
 
-*Debug/Testing*
-/setdate YYYY-MM-DD - Set test date
+*Examples:*
+/setonline BITP1113 week12
+/setonline all week12
+/setonline BITP1113 tomorrow
+
+*💬 Natural Language:*
+• "Set class BITP1113 online on week 12"
+• "All classes online tomorrow"
+
+/delete online <id> - Remove setting
+""",
+            "settings": """
+*⚙️ Settings & Preferences*
+
+/settings - Settings menu
+/language [en|my] - Set language
+/mute [hours] - Mute notifications (default 1h)
+
+*🔔 Notification Schedule:*
+• 10:00 PM - Tomorrow's class briefing
+• 8:00 PM - Off-day alert
+• 12:00 AM - Midnight TODO review
+• Every 30 min - Assignment/task reminders
+
+Toggle notifications in /settings menu.
+""",
+            "other": """
+*🔧 Other Commands*
+
+/status - Overview of all pending items
+/stats [days] - Productivity statistics
+/search <query> - Search everything
+/suggest - AI-powered suggestions
+/export [schedule|assignments|all] - Export data
+/undo - Undo last action
+
+*🗑️ Delete Items:*
+/delete assignment <id>
+/delete task <id>
+/delete todo <id>
+/delete event <id>
+/delete online <id>
+
+*✏️ Edit Items:*
+/edit schedule <id> room <value>
+/edit assignment <id> due <date>
+""",
+            "debug": """
+*🛠️ Debug Commands*
+
+/setdate YYYY-MM-DD - Override current date
 /resetdate - Reset to real date
-/settime HH:MM - Set test time (24h)
+/settime HH:MM - Override current time
 /resettime - Reset to real time
-/trigger <type> - Trigger notification manually
+/trigger <type> - Manually trigger notification
+   Types: briefing, offday, midnight,
+          assignments, tasks, todos, semester
+""",
+        }
 
-You can also send me:
-• Voice messages (up to 30 min) for transcription
-• "I have assignment report for BITP1113 due Friday"
+        if section in help_sections:
+            await update.message.reply_text(
+                help_sections[section].strip(),
+                parse_mode="Markdown"
+            )
+            return
+
+    # Main help menu
+    help_text = """
+*📚 UTeM Student Assistant Bot*
+
+Your AI-powered academic helper for schedules, assignments, tasks, and more!
+
+*📖 Help Topics:*
+/help schedule - Classes & timetable
+/help assignments - Assignment tracking
+/help tasks - Meetings & appointments
+/help todos - Quick reminders
+/help exams - Exam management
+/help voice - Voice notes
+/help online - Online class settings
+/help settings - Preferences & notifications
+/help other - Search, stats, export, undo
+/help debug - Debug commands
+
+*🚀 Quick Start:*
+1. /setup - Upload calendar & timetable
+2. /menu - Interactive menu
+3. Or just chat naturally!
+
+*💬 Natural Language Examples:*
 • "What class tomorrow?"
-• "Give me suggestions"
-• "Search database"
+• "Assignment report due Friday 5pm"
+• "Meet Dr Intan tomorrow 10am"
+• "Remind me buy groceries"
+• "Done with BITP report"
+• "What week is this?"
+• "Lab test OS next week"
+
+*📸 Send Images:*
+• Academic calendar → import events
+• Class timetable → import schedule
+• Assignment sheet → add assignment
+
+*🎤 Send Voice:*
+Record & send → transcribe + process
+
+Use /menu for quick access to all features!
 """
     await update.message.reply_text(help_text.strip(), parse_mode="Markdown")
 
@@ -273,13 +453,56 @@ async def week_number_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not semester_start:
         await update.message.reply_text(
             "Semester start date not set.\n"
-            "Use /setup to upload your academic calendar."
+            "Use /setsemester YYYY-MM-DD to set it manually,\n"
+            "or upload your academic calendar image."
         )
         return
 
     week = get_current_week(get_today(), semester_start, events)
     response = format_current_week(week, semester_start_str)
     await update.message.reply_text(response)
+
+
+async def setsemester_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /setsemester command - set semester start date manually."""
+    chat_id = update.effective_chat.id
+    args = context.args
+
+    if not args:
+        # Show current setting and usage
+        user_config = db.get_user_config(chat_id)
+        current = user_config.get("semester_start_date") if user_config else None
+        current_display = current if current else "Not set"
+
+        await update.message.reply_text(
+            f"*Semester Start Date*\n\n"
+            f"Current: {current_display}\n\n"
+            f"Usage: `/setsemester YYYY-MM-DD`\n"
+            f"Example: `/setsemester 2025-01-06`\n\n"
+            f"This is the first day of Week 1.",
+            parse_mode="Markdown"
+        )
+        return
+
+    date_str = args[0]
+
+    # Validate date format
+    try:
+        parsed_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+        db.update_user_config(chat_id, semester_start_date=date_str)
+
+        await update.message.reply_text(
+            f"✅ Semester start date set to: {parsed_date.strftime('%d %B %Y')}\n\n"
+            f"Week 1 begins on this date.\n"
+            f"Use /week_number to check current week."
+        )
+    except ValueError:
+        await update.message.reply_text(
+            "❌ Invalid date format.\n\n"
+            "Please use: `/setsemester YYYY-MM-DD`\n"
+            "Example: `/setsemester 2025-01-06`",
+            parse_mode="Markdown"
+        )
 
 
 async def offday_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -395,11 +618,11 @@ async def online_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     if not overrides:
         await update.message.reply_text(
-            "No online class settings configured.\n\n"
-            "Use /setonline to set classes as online:\n"
-            "  /setonline BITP1113 week12\n"
-            "  /setonline all week12\n"
-            "  /setonline BITP1113 2025-01-15"
+            "🖥️ No online class settings configured.\n\n"
+            "Set classes as online:\n"
+            "💬 \"Set BITP1113 online week 12\"\n"
+            "💬 \"All classes online tomorrow\"\n"
+            "⌨️ /setonline BITP1113 week12"
         )
         return
 
@@ -449,7 +672,6 @@ async def setonline_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             await update.message.reply_text("Invalid week number. Use format: week12")
             return
     elif time_arg == "tomorrow":
-        from datetime import timedelta
         tomorrow = get_today() + timedelta(days=1)
         specific_date = tomorrow.isoformat()
     elif time_arg == "today":
@@ -671,7 +893,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             await update.message.reply_text(f"Next week is Week {week}")
         else:
             await update.message.reply_text(
-                "Semester start date not set. Use /setup to configure."
+                "Semester start date not set. Use /setsemester YYYY-MM-DD to set it."
             )
 
     elif intent == Intent.QUERY_TODAY_CLASSES:
@@ -823,7 +1045,6 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                     await update.message.reply_text("Invalid week number.")
                     return
             elif time_part.lower() == "tomorrow":
-                from datetime import timedelta
                 tomorrow = get_today() + timedelta(days=1)
                 specific_date = tomorrow.isoformat()
             elif time_part.lower() == "today":
@@ -856,25 +1077,99 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     elif intent == Intent.ADD_EXAM:
         # Natural language add exam
-        subject = entities.subject_code
+        subject_input = entities.subject_code
         exam_type = entities.title or "exam"
         date_str = entities.date
+        class_type = entities.description  # LAB or LEC
 
-        if subject and date_str:
+        if subject_input:
+            # Try to resolve subject alias (OS -> Operating System / actual code)
+            aliases = db.get_subject_aliases()
+            subject = aliases.get(subject_input.lower(), subject_input.upper())
+
+            # Get user's semester config
+            chat_id = update.effective_chat.id
+            user_config = db.get_user_config(chat_id)
+            events = db.get_all_events()
+            semester_start_str = user_config.get("semester_start_date") if user_config else None
+            semester_start = parse_date(semester_start_str) if semester_start_str else None
+
+            # Determine the week number
+            week_num = None
+            if date_str:
+                if "next week" in date_str.lower() or "minggu depan" in date_str.lower():
+                    if semester_start:
+                        week_num = get_next_week(get_today(), semester_start, events)
+                elif "this week" in date_str.lower() or "minggu ni" in date_str.lower():
+                    if semester_start:
+                        current_week = get_current_week(get_today(), semester_start, events)
+                        if isinstance(current_week, int):
+                            week_num = current_week
+
+            # Look up the schedule to find the actual day
+            actual_date = None
+            schedule_day = None
+            schedule_time = None
+
+            if week_num and semester_start:
+                # Find the schedule slot for this subject and class type
+                schedule_slots = db.get_schedule_by_subject(subject)
+                target_slot = None
+
+                if class_type and schedule_slots:
+                    # Filter by class type (LAB or LEC)
+                    for slot in schedule_slots:
+                        if slot.get("class_type", "").upper() == class_type:
+                            target_slot = slot
+                            break
+
+                # If no class type match or no class type specified, use first slot
+                if not target_slot and schedule_slots:
+                    target_slot = schedule_slots[0]
+
+                if target_slot:
+                    day_of_week = target_slot.get("day_of_week", 0)  # 0=Monday
+                    schedule_time = target_slot.get("start_time")
+                    day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+                    schedule_day = day_names[day_of_week]
+
+                    # Calculate actual date: semester_start + (week_num - 1) * 7 + day_of_week
+                    week_start = semester_start + timedelta(weeks=(week_num - 1))
+                    actual_date = week_start + timedelta(days=day_of_week)
+                    date_str = actual_date.isoformat()
+
+            # Build exam name with class type
+            exam_name = exam_type.replace("labtest", "Lab Test").replace("lab test", "Lab Test").title()
+            if class_type:
+                exam_name = f"{exam_name} ({class_type})"
+
             exam_id = db.add_exam(
                 subject_code=subject,
                 exam_type=exam_type,
-                exam_date=date_str
+                exam_date=date_str,
+                exam_time=schedule_time
             )
             db.add_action_history("add", "events", exam_id)
-            await update.message.reply_text(
-                f"Exam added: {exam_type.title()} for {subject} on {date_str}\n"
-                f"ID: {exam_id}"
-            )
+
+            # Build response
+            response = f"✅ {exam_name} added for {subject}"
+            if actual_date and schedule_day:
+                response += f"\n📅 {schedule_day}, {actual_date.strftime('%d %b %Y')}"
+                if week_num:
+                    response += f" (Week {week_num})"
+            elif date_str:
+                response += f" on {date_str}"
+            if schedule_time:
+                response += f"\n⏰ {schedule_time}"
+            response += f"\n🔔 Reminders will be sent before the test"
+            response += f"\nID: {exam_id}"
+
+            await update.message.reply_text(response)
         else:
             await update.message.reply_text(
                 "Please specify subject and date. Example:\n"
-                "\"final exam BITP1113 on 15 Jan 2025\""
+                "💬 \"Lab test for OS next week on lab section\"\n"
+                "💬 \"Final exam BITP1113 on 15 Jan 2025\""
             )
 
     elif intent == Intent.QUERY_EXAMS:
@@ -1039,30 +1334,41 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     elif intent == Intent.GENERAL_CHAT:
         # Simple responses for general chat
         msg_lower = message_text.lower()
-        if any(g in msg_lower for g in ["hi", "hello", "hey", "assalamualaikum"]):
+        # Islamic greeting - respond appropriately
+        if any(g in msg_lower for g in ["assalamualaikum", "salam", "aslm", "slm"]):
             await update.message.reply_text(
-                "Waalaikumussalam! How can I help you today?"
+                "Waalaikumussalam! 👋\n\nHow can I help you today?\nTry /menu for quick access."
+            )
+        # Regular greeting
+        elif any(g in msg_lower for g in ["hi", "hello", "hey", "helo", "hai"]):
+            await update.message.reply_text(
+                "Hello! 👋\n\nHow can I help you today?\nTry /menu for quick access."
             )
         elif any(t in msg_lower for t in ["thank", "thanks", "terima kasih"]):
-            await update.message.reply_text("You're welcome! Let me know if you need anything else.")
+            await update.message.reply_text("You're welcome! 😊 Let me know if you need anything else.")
         elif any(b in msg_lower for b in ["bye", "goodbye", "see you"]):
-            await update.message.reply_text("Goodbye! Good luck with your studies!")
+            await update.message.reply_text("Goodbye! Good luck with your studies! 📚")
         else:
             await update.message.reply_text(
-                "I'm here to help with your schedule and tasks.\n"
-                "Use /help to see what I can do!"
+                "I'm here to help with your schedule and tasks.\n\n"
+                "Try: \"What class tomorrow?\" or use /menu"
             )
 
     else:
         await update.message.reply_text(
-            "I'm not sure what you mean.\n"
-            "Try asking about your classes, assignments, or tasks.\n"
-            "Use /help to see available commands."
+            "🤔 I'm not sure what you mean.\n\n"
+            "Try:\n"
+            "📅 \"What class tomorrow?\"\n"
+            "📝 \"Assignment report due Friday\"\n"
+            "✅ \"Remind me buy groceries at 3pm\"\n\n"
+            "Use /menu for quick access or /help for all commands."
         )
 
 
 async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle incoming photo messages - detect type and parse."""
+    chat_id = update.effective_chat.id
+
     # Get the largest photo
     photo = update.message.photo[-1]
     file = await photo.get_file()
@@ -1076,14 +1382,65 @@ async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYP
     if image_type == "calendar":
         await update.message.reply_text(
             "This looks like an academic calendar!\n"
-            "Use /setup to properly import your calendar with confirmation."
+            "Processing... Please wait."
         )
+        # Process the calendar image
+        events = await parse_academic_calendar(bytes(image_bytes))
+        if events:
+            # Store events - unpack AcademicEvent dataclass
+            for event in events:
+                db.add_event(
+                    event_type=event.event_type,
+                    start_date=event.start_date,
+                    name=event.name,
+                    name_en=event.name_en,
+                    end_date=event.end_date,
+                    affects_classes=event.affects_classes
+                )
+            # Try to detect semester start from lecture_period event
+            for event in events:
+                if event.event_type == 'lecture_period':
+                    db.update_user_config(chat_id, semester_start_date=event.start_date)
+                    break
+            await update.message.reply_text(
+                f"✅ Imported {len(events)} events from calendar!\n"
+                f"Use /week_number to check current week."
+            )
+        else:
+            await update.message.reply_text(
+                "Couldn't extract events from this image.\n"
+                "Please try with a clearer image."
+            )
 
     elif image_type == "timetable":
         await update.message.reply_text(
             "This looks like a class timetable!\n"
-            "Use /setup to properly import your timetable with confirmation."
+            "Processing... Please wait."
         )
+        # Process the timetable image
+        schedule_entries = await parse_timetable(bytes(image_bytes))
+        if schedule_entries:
+            # Store schedule slots - unpack ScheduleSlot dataclass
+            for entry in schedule_entries:
+                db.add_schedule_slot(
+                    day_of_week=entry.day_of_week,
+                    start_time=entry.start_time,
+                    end_time=entry.end_time,
+                    subject_code=entry.subject_code,
+                    subject_name=entry.subject_name,
+                    class_type=entry.class_type,
+                    room=entry.room,
+                    lecturer_name=entry.lecturer_name
+                )
+            await update.message.reply_text(
+                f"✅ Imported {len(schedule_entries)} class entries!\n"
+                f"Use /today or /week to see your schedule."
+            )
+        else:
+            await update.message.reply_text(
+                "Couldn't extract schedule from this image.\n"
+                "Please try with a clearer image."
+            )
 
     elif image_type == "assignment":
         response = await handle_assignment_image(update, context, bytes(image_bytes))
@@ -1091,12 +1448,12 @@ async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYP
 
     else:
         await update.message.reply_text(
-            "I couldn't determine the type of this image.\n"
+            "🤔 I couldn't determine the type of this image.\n\n"
             "I can recognize:\n"
-            "- Academic calendars\n"
-            "- Class timetables\n"
-            "- Assignment sheets\n\n"
-            "Please try with a clearer image."
+            "📅 Academic calendars → auto-import events\n"
+            "🗓️ Class timetables → auto-import schedule\n"
+            "📝 Assignment sheets → auto-add assignment\n\n"
+            "Try with a clearer image or use /setup for guided upload."
         )
 
 
@@ -1222,13 +1579,13 @@ async def notes_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     if not notes:
         await update.message.reply_text(
-            "📝 No voice notes yet.\n\n"
-            "Send me a voice message and I'll:\n"
-            "- Transcribe it\n"
-            "- Create summaries or meeting minutes\n"
-            "- Extract tasks and action items\n"
-            "- Format as study notes\n\n"
-            "Try it now!"
+            "🎤 No voice notes yet.\n\n"
+            "Send me a voice message (up to 30 min) and I'll:\n"
+            "📝 Transcribe it\n"
+            "📋 Create summaries or meeting minutes\n"
+            "✅ Extract tasks and action items\n"
+            "📚 Format as study notes\n\n"
+            "Just record and send a voice message to try!"
         )
         return
 
@@ -1266,7 +1623,10 @@ async def suggest_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if total_items == 0:
             await update.message.reply_text(
                 "📊 No pending items to analyze!\n\n"
-                "Add some assignments, tasks, or TODOs first, then I can give you suggestions."
+                "Add items first, then I'll give you smart suggestions:\n"
+                "📝 \"Assignment report BITP1113 due Friday\"\n"
+                "📋 \"Meet Dr Intan tomorrow 10am\"\n"
+                "✅ \"Remind me buy groceries at 3pm\""
             )
             return
 
@@ -1376,7 +1736,6 @@ async def trigger_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     """Handle /trigger command - manually trigger a notification for testing."""
     from ..scheduler.notifications import get_scheduler
     from ..utils.semester_logic import is_class_day
-    from datetime import timedelta
 
     args = context.args
     valid_triggers = {
@@ -1452,10 +1811,11 @@ async def exams_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     if not exams:
         await update.message.reply_text(
-            "No upcoming exams found.\n\n"
-            "Add exams using:\n"
-            "/setexam BITP1113 final 2025-01-15\n"
-            "Or: \"final exam BITP1113 on 15 Jan 2025\""
+            "📝 No upcoming exams found.\n\n"
+            "Add exams:\n"
+            "💬 \"Final exam BITP1113 on 15 Jan 2025\"\n"
+            "📸 Upload academic calendar to auto-import\n"
+            "⌨️ /setexam BITP1113 final 2025-01-15"
         )
         return
 
@@ -1819,9 +2179,34 @@ async def mute_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /settings command - show settings menu."""
+    global _test_date_override, _test_time_override
+
+    # Get current date/time info
+    current_date = get_today()
+    current_time = get_now()
+    real_date = date.today()
+    real_time = datetime.now(MY_TZ)
+
+    has_date_override = _test_date_override is not None
+    has_time_override = _test_time_override is not None
+
+    # Build settings message
+    msg = "⚙️ *Settings*\n\n"
+    msg += f"📅 Date: `{current_date.strftime('%a, %d %b %Y')}`"
+    if has_date_override:
+        msg += " ⚠️ _Override_"
+    msg += f"\n⏰ Time: `{current_time.strftime('%H:%M')}`"
+    if has_time_override:
+        msg += " ⚠️ _Override_"
+
+    if has_date_override or has_time_override:
+        msg += f"\n\n_Real: {real_date.strftime('%d %b %Y')} {real_time.strftime('%H:%M')}_"
+
+    msg += "\n\nChoose an option:"
+
     await update.message.reply_text(
-        "⚙️ *Settings*\n\nChoose an option:",
-        reply_markup=get_settings_keyboard(),
+        msg,
+        reply_markup=get_settings_keyboard(has_date_override, has_time_override),
         parse_mode="Markdown"
     )
 
@@ -1933,6 +2318,8 @@ async def export_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle inline keyboard button callbacks."""
+    global _test_date_override, _test_time_override
+
     query = update.callback_query
     await query.answer()
 
@@ -1948,16 +2335,95 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         )
 
     elif data == "menu_settings":
+        # Get current date/time info
+        current_date = get_today()
+        current_time = get_now()
+        real_date = date.today()
+        real_time = datetime.now(MY_TZ)
+
+        has_date_override = _test_date_override is not None
+        has_time_override = _test_time_override is not None
+
+        # Build settings message
+        msg = "⚙️ *Settings*\n\n"
+        msg += f"📅 Date: `{current_date.strftime('%a, %d %b %Y')}`"
+        if has_date_override:
+            msg += " ⚠️ _Override_"
+        msg += f"\n⏰ Time: `{current_time.strftime('%H:%M')}`"
+        if has_time_override:
+            msg += " ⚠️ _Override_"
+
+        if has_date_override or has_time_override:
+            msg += f"\n\n_Real: {real_date.strftime('%d %b %Y')} {real_time.strftime('%H:%M')}_"
+
+        msg += "\n\nChoose an option:"
+
         await query.edit_message_text(
-            "⚙️ *Settings*\n\nChoose an option:",
-            reply_markup=get_settings_keyboard(),
+            msg,
+            reply_markup=get_settings_keyboard(has_date_override, has_time_override),
             parse_mode="Markdown"
+        )
+
+    elif data == "reset_date":
+        _test_date_override = None
+        await query.edit_message_text(
+            f"✅ Date reset to real date: {date.today().strftime('%a, %d %b %Y')}",
+            reply_markup=get_content_with_menu_keyboard()
+        )
+
+    elif data == "reset_time":
+        _test_time_override = None
+        await query.edit_message_text(
+            f"✅ Time reset to real time: {datetime.now(MY_TZ).strftime('%H:%M')}",
+            reply_markup=get_content_with_menu_keyboard()
         )
 
     elif data == "menu_language":
         await query.edit_message_text(
             "🌐 *Language*\n\nChoose your language:",
             reply_markup=get_language_keyboard(),
+            parse_mode="Markdown"
+        )
+
+    elif data == "menu_semester":
+        user_config = db.get_user_config(chat_id)
+        current = user_config.get("semester_start_date") if user_config else None
+        current_display = current if current else "Not set"
+
+        await query.edit_message_text(
+            f"📅 *Semester Settings*\n\n"
+            f"Current semester start: *{current_display}*\n\n"
+            f"Choose an option:",
+            reply_markup=get_semester_keyboard(),
+            parse_mode="Markdown"
+        )
+
+    elif data == "semester_set":
+        await query.edit_message_text(
+            "📅 *Set Semester Start Date*\n\n"
+            "Send the date in this format:\n"
+            "`/setsemester YYYY-MM-DD`\n\n"
+            "Example: `/setsemester 2025-01-06`\n\n"
+            "This is the first day of Week 1.",
+            reply_markup=get_semester_keyboard(),
+            parse_mode="Markdown"
+        )
+
+    elif data == "semester_week":
+        user_config = db.get_user_config(chat_id)
+        events = db.get_all_events()
+        semester_start_str = user_config.get("semester_start_date") if user_config else None
+        semester_start = parse_date(semester_start_str) if semester_start_str else None
+
+        if semester_start:
+            week = get_current_week(get_today(), semester_start, events)
+            response = format_current_week(week, semester_start_str)
+        else:
+            response = "Semester start date not set.\nUse 'Set Semester Start' to configure."
+
+        await query.edit_message_text(
+            f"📊 *Current Week*\n\n{response}",
+            reply_markup=get_semester_keyboard(),
             parse_mode="Markdown"
         )
 
@@ -2038,11 +2504,17 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
     elif data == "cmd_help":
         help_text = (
             "📖 *Quick Help*\n\n"
-            "*Schedule:* /today, /tomorrow, /week\n"
-            "*Tasks:* /assignments, /tasks, /todos\n"
-            "*Actions:* /done, /delete, /edit\n"
-            "*Settings:* /settings, /mute, /language\n\n"
-            "Use /help for full command list."
+            "*📅 Schedule:* /today, /tomorrow, /week\n"
+            "*📝 Items:* /assignments, /tasks, /todos\n"
+            "*✅ Actions:* /done, /delete, /edit, /undo\n"
+            "*📝 Exams:* /exams, /setexam\n"
+            "*🎤 Voice:* /notes, /suggest\n"
+            "*⚙️ Settings:* /settings, /mute, /language\n\n"
+            "*💬 Just chat naturally!*\n"
+            "• \"What class tomorrow?\"\n"
+            "• \"Assignment due Friday 5pm\"\n"
+            "• \"Done with BITP report\"\n\n"
+            "Use /help for detailed topics."
         )
         await query.edit_message_text(
             help_text,
@@ -2058,6 +2530,46 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         await query.edit_message_text(
             msg,
             reply_markup=get_content_with_menu_keyboard()
+        )
+
+    # Initial language selection (for new users in onboarding)
+    elif data.startswith("initial_lang_"):
+        lang = data.split("_")[2]  # initial_lang_en -> en
+        db.set_language(chat_id, lang)
+
+        if lang == "en":
+            msg = """✅ Language set to English.
+
+Welcome! I can help you with:
+📅 Class schedule & week tracking
+📝 Assignment tracking with reminders
+✅ Tasks and TODO management
+🎤 Voice notes transcription
+📸 Image recognition (calendar, timetable, assignments)
+💡 AI-powered suggestions
+🔔 Daily briefings and notifications
+
+Use /setup to configure your calendar and timetable.
+Use /help to see all available commands."""
+        else:
+            msg = """✅ Bahasa ditetapkan kepada Bahasa Melayu.
+
+Selamat datang! Saya boleh membantu anda dengan:
+📅 Jadual kelas & penjejakan minggu
+📝 Penjejakan tugasan dengan peringatan
+✅ Pengurusan tugas dan TODO
+🎤 Transkripsi nota suara
+📸 Pengecaman imej (kalendar, jadual, tugasan)
+💡 Cadangan berkuasa AI
+🔔 Taklimat harian dan pemberitahuan
+
+Gunakan /setup untuk mengkonfigurasi kalendar dan jadual anda.
+Gunakan /help untuk melihat semua arahan."""
+
+        await query.edit_message_text(
+            msg,
+            reply_markup=get_main_menu_keyboard(),
+            parse_mode="Markdown"
         )
 
     # Mute
@@ -2403,6 +2915,7 @@ def register_handlers(application: Application) -> None:
     application.add_handler(CommandHandler("today", today_command))
     application.add_handler(CommandHandler("week", week_command))
     application.add_handler(CommandHandler("week_number", week_number_command))
+    application.add_handler(CommandHandler("setsemester", setsemester_command))
     application.add_handler(CommandHandler("offday", offday_command))
     application.add_handler(CommandHandler("assignments", assignments_command))
     application.add_handler(CommandHandler("tasks", tasks_command))

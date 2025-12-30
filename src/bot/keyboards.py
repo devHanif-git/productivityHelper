@@ -45,21 +45,34 @@ def get_schedule_menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(keyboard)
 
 
-def get_settings_keyboard() -> InlineKeyboardMarkup:
+def get_settings_keyboard(has_date_override: bool = False, has_time_override: bool = False) -> InlineKeyboardMarkup:
     """Create the settings menu keyboard."""
     keyboard = [
         [
-            InlineKeyboardButton("🔔 Notifications", callback_data="menu_notifications"),
+            InlineKeyboardButton("📅 Semester", callback_data="menu_semester"),
             InlineKeyboardButton("🌐 Language", callback_data="menu_language"),
+        ],
+        [
+            InlineKeyboardButton("🔔 Notifications", callback_data="menu_notifications"),
         ],
         [
             InlineKeyboardButton("🔇 Mute (1h)", callback_data="mute_1h"),
             InlineKeyboardButton("🔇 Mute (3h)", callback_data="mute_3h"),
         ],
-        [
-            InlineKeyboardButton("🔙 Back", callback_data="menu_main"),
-        ],
     ]
+
+    # Add reset buttons if overrides are active
+    if has_date_override or has_time_override:
+        reset_row = []
+        if has_date_override:
+            reset_row.append(InlineKeyboardButton("🔄 Reset Date", callback_data="reset_date"))
+        if has_time_override:
+            reset_row.append(InlineKeyboardButton("🔄 Reset Time", callback_data="reset_time"))
+        keyboard.append(reset_row)
+
+    keyboard.append([
+        InlineKeyboardButton("🔙 Back", callback_data="menu_main"),
+    ])
     return InlineKeyboardMarkup(keyboard)
 
 
@@ -69,6 +82,33 @@ def get_language_keyboard() -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton("🇬🇧 English", callback_data="lang_en"),
             InlineKeyboardButton("🇲🇾 Bahasa Melayu", callback_data="lang_my"),
+        ],
+        [
+            InlineKeyboardButton("🔙 Back", callback_data="menu_settings"),
+        ],
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
+def get_initial_language_keyboard() -> InlineKeyboardMarkup:
+    """Create language selection keyboard for first-time users (no back button)."""
+    keyboard = [
+        [
+            InlineKeyboardButton("🇬🇧 English", callback_data="initial_lang_en"),
+            InlineKeyboardButton("🇲🇾 Bahasa Melayu", callback_data="initial_lang_my"),
+        ],
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
+def get_semester_keyboard() -> InlineKeyboardMarkup:
+    """Create semester settings keyboard."""
+    keyboard = [
+        [
+            InlineKeyboardButton("📅 Set Semester Start", callback_data="semester_set"),
+        ],
+        [
+            InlineKeyboardButton("📊 Current Week", callback_data="semester_week"),
         ],
         [
             InlineKeyboardButton("🔙 Back", callback_data="menu_settings"),

@@ -223,11 +223,12 @@ Available intents:
 - query_todos: User asks about pending TODOs
 - complete_todo: User marks a TODO as done
 
-- query_tomorrow: User asks about tomorrow's classes
+- query_today: User asks about today's classes/schedule (includes Malay: "kelas harini", "hari ni ada kelas")
+- query_tomorrow: User asks about tomorrow's classes (includes Malay: "kelas esok", "besok ada kelas")
 - query_week: User asks about this week's schedule
 - query_subject: User asks about a specific subject's schedule
 
-- query_current_week: User asks what week of semester it is
+- query_current_week: User asks what week of semester it is (includes Malay: "minggu ke berapa")
 - query_next_week: User asks about next week
 - query_next_offday: User asks about next holiday/off day
 - query_semester: User asks about semester dates
@@ -262,6 +263,11 @@ Examples:
 - "What week is this?" → query_current_week
 - "Take wife at Satria at 3pm" → add_todo, title="Take wife at Satria", time="3pm"
 - "Thanks!" → general_chat
+- "kelas harini apa je?" → query_today (Malay: what classes today)
+- "esok ada kelas x?" → query_tomorrow (Malay: any class tomorrow)
+- "minggu ni minggu ke brp?" → query_current_week (Malay: what week is this)
+- "today got class?" → query_today (Manglish)
+- "tmr kelas ape" → query_tomorrow (mixed: tomorrow what class)
 """
 
 
@@ -278,53 +284,189 @@ async def classify_message(message: str) -> ClassificationResult:
     # Quick pattern matching for common queries
     message_lower = message.lower().strip()
 
-    # Week queries
-    if re.search(r"(what|which)\s+week\s+(is\s+)?(this|now)", message_lower):
+    # Lab test / quiz / test patterns - MUST be checked before week queries
+    # Pattern: "i have lab test for OS next week on lab section"
+    # Pattern: "lab test BITP1113 next week", "quiz OS tomorrow"
+    TEST_WORDS = r"(lab\s*test|labtest|quiz|kuiz|test|ujian)"
+    SUBJECT_PATTERN = r"([A-Za-z]{2,}[\d]*|[A-Za-z]+\s+[A-Za-z]+)"  # OS, BITP1113, Operating System
+
+    lab_test_match = re.search(
+        rf"(i\s+have\s+|ada\s+|got\s+)?{TEST_WORDS}\s+(for\s+|untuk\s+)?{SUBJECT_PATTERN}",
+        message_lower
+    )
+    if lab_test_match:
+        test_type = lab_test_match.group(2) if lab_test_match.group(2) else "test"
+        subject = lab_test_match.group(4) if lab_test_match.group(4) else None
+
+        # Extract date (next week, tomorrow, etc.)
+        date_match = re.search(r"(next\s+week|minggu\s+depan|tomorrow|esok|this\s+week|minggu\s+ni|\d{4}-\d{2}-\d{2}|\d+\s+\w+\s+\d{4})", message_lower)
+        date_part = date_match.group(1) if date_match else None
+
+        # Extract class type (lab section, lecture, etc.)
+        class_type = None
+        if re.search(r"(lab\s+section|lab\s+class|makmal|lab)", message_lower):
+            class_type = "LAB"
+        elif re.search(r"(lecture|kuliah|lec)", message_lower):
+            class_type = "LEC"
+
+        return ClassificationResult(
+            intent=Intent.ADD_EXAM,
+            entities=ParsedEntities(
+                subject_code=subject.upper() if subject else None,
+                date=date_part,
+                title=test_type.replace(" ", ""),  # labtest, quiz, test
+                description=class_type  # Store class type in description
+            ),
+            confidence=0.90
+        )
+
+    # Week queries (comprehensive patterns)
+    # Week words: week, minggu, mgu
+    WEEK_WORDS = r"(week|minggu|mgu|wk)"
+    # This/now words: this, now, ni, ini, skrg, sekarang, current
+    THIS_WORDS = r"(this|now|ni|ini|skrg|sekarang|current|skang)"
+    # Next words: next, dpn, depan, akan datang
+    NEXT_WORDS = r"(next|dpn|depan|akan\s*datang|coming)"
+    # Question words for week
+    WEEK_QUESTION = r"(what|which|apa|berapa|brp|mana)"
+
+    # Current week patterns
+    # "what week is this", "minggu ke berapa ni", "week berapa skrg"
+    if re.search(rf"{WEEK_QUESTION}\s*{WEEK_WORDS}\s*(is\s*|ke\s*)?{THIS_WORDS}", message_lower):
         return ClassificationResult(
             intent=Intent.QUERY_CURRENT_WEEK,
             entities=ParsedEntities(),
             confidence=0.95
         )
+    # "minggu ni week berapa", "this week apa"
+    if re.search(rf"{THIS_WORDS}\s*{WEEK_WORDS}", message_lower):
+        return ClassificationResult(
+            intent=Intent.QUERY_CURRENT_WEEK,
+            entities=ParsedEntities(),
+            confidence=0.95
+        )
+    # "week ke berapa", "minggu keberapa" (implied current)
+    if re.search(rf"^{WEEK_WORDS}\s*(ke\s*)?(berapa|brp)\s*\??$", message_lower):
+        return ClassificationResult(
+            intent=Intent.QUERY_CURRENT_WEEK,
+            entities=ParsedEntities(),
+            confidence=0.85
+        )
 
-    if re.search(r"(what|which)\s+week\s+(is\s+)?next", message_lower):
+    # Next week patterns
+    # "what week is next", "minggu depan"
+    if re.search(rf"{WEEK_QUESTION}\s*{WEEK_WORDS}\s*(is\s*)?{NEXT_WORDS}", message_lower):
+        return ClassificationResult(
+            intent=Intent.QUERY_NEXT_WEEK,
+            entities=ParsedEntities(),
+            confidence=0.95
+        )
+    if re.search(rf"{NEXT_WORDS}\s*{WEEK_WORDS}", message_lower):
+        return ClassificationResult(
+            intent=Intent.QUERY_NEXT_WEEK,
+            entities=ParsedEntities(),
+            confidence=0.95
+        )
+    if re.search(rf"{WEEK_WORDS}\s*{NEXT_WORDS}", message_lower):
         return ClassificationResult(
             intent=Intent.QUERY_NEXT_WEEK,
             entities=ParsedEntities(),
             confidence=0.95
         )
 
-    # Class queries - Tomorrow
-    if re.search(r"(what|any)\s+(class|classes)\s+tomorrow", message_lower):
+    # Class queries - Tomorrow (comprehensive patterns)
+    # Typo-tolerant class words: kelas, klas, kls, class, classes, clas
+    CLASS_WORDS_TMR = r"(ke?la?s|class(es)?|clas)"
+    # Typo-tolerant tomorrow words: tomorrow, tmr, tmrw, 2morrow, esok, esk, besok
+    TOMORROW_WORDS = r"(tomorrow|tmr|tmrw|2morrow|tomoro|esok|esk|besok|bsk)"
+    # Question starters (includes "x"/"tak" Malay question/negation markers)
+    QUESTION_WORDS_TMR = r"(what|whats|what's|wht|apa|ape|apakah|any|got|ada|ade|x|tak|do\s*i\s*have)"
+
+    # Pattern 1: "[question] [class] [question?] [tomorrow]" - "what class tomorrow", "ada kelas x esok"
+    if re.search(rf"{QUESTION_WORDS_TMR}\s*{CLASS_WORDS_TMR}\s*{QUESTION_WORDS_TMR}?\s*{TOMORROW_WORDS}", message_lower):
+        return ClassificationResult(
+            intent=Intent.QUERY_TOMORROW_CLASSES,
+            entities=ParsedEntities(),
+            confidence=0.95
+        )
+    # Pattern 2: "[tomorrow] [question/got] [class]" - "tomorrow got class", "esok ada kelas"
+    if re.search(rf"{TOMORROW_WORDS}\s*{QUESTION_WORDS_TMR}?\s*{CLASS_WORDS_TMR}", message_lower):
+        return ClassificationResult(
+            intent=Intent.QUERY_TOMORROW_CLASSES,
+            entities=ParsedEntities(),
+            confidence=0.95
+        )
+    # Pattern 3: "[class] [tomorrow] [question]" - "kelas esok apa je", "class tomorrow?"
+    if re.search(rf"{CLASS_WORDS_TMR}\s*{TOMORROW_WORDS}\s*{QUESTION_WORDS_TMR}?", message_lower):
+        return ClassificationResult(
+            intent=Intent.QUERY_TOMORROW_CLASSES,
+            entities=ParsedEntities(),
+            confidence=0.95
+        )
+    # Pattern 4: "[question] [tomorrow] [class]" - "apa esok kelas"
+    if re.search(rf"{QUESTION_WORDS_TMR}\s*{TOMORROW_WORDS}\s*{CLASS_WORDS_TMR}", message_lower):
+        return ClassificationResult(
+            intent=Intent.QUERY_TOMORROW_CLASSES,
+            entities=ParsedEntities(),
+            confidence=0.95
+        )
+    # Pattern 5: Schedule variants - "jadual esok", "schedule tomorrow"
+    if re.search(rf"(jadual|sched|schedule)\s*{TOMORROW_WORDS}", message_lower):
         return ClassificationResult(
             intent=Intent.QUERY_TOMORROW_CLASSES,
             entities=ParsedEntities(),
             confidence=0.95
         )
 
-    # Class queries - Today (English and Malay)
-    if re.search(r"(what|any)\s+(class|classes|is\s+my\s+schedule)\s+today", message_lower):
+    # Class queries - Today (comprehensive patterns)
+    # Typo-tolerant class words: kelas, klas, kls, class, classes, clas
+    CLASS_WORDS = r"(ke?la?s|class(es)?|clas)"
+    # Typo-tolerant today words: today, tday, 2day, hari ini, harini, hari ni, hr ni, hri ni
+    TODAY_WORDS = r"(today|tday|2day|hari\s*ini|harini|hari\s*ni|hr\s*ni|hri\s*ni)"
+    # Question starters (includes "x"/"tak" Malay question/negation markers)
+    QUESTION_WORDS = r"(what|whats|what's|wht|apa|ape|apakah|any|got|ada|ade|x|tak|do\s*i\s*have)"
+
+    # Pattern 1: "[question] [class] [question?] [today]" - "what class today", "apa kelas harini", "ada kelas x hari ni"
+    if re.search(rf"{QUESTION_WORDS}\s*{CLASS_WORDS}\s*{QUESTION_WORDS}?\s*{TODAY_WORDS}", message_lower):
         return ClassificationResult(
             intent=Intent.QUERY_TODAY_CLASSES,
             entities=ParsedEntities(),
             confidence=0.95
         )
-    if re.search(r"(do\s+i\s+have|ada)\s+(class|classes|kelas)\s+today", message_lower):
+    # Pattern 2: "[today] [question/got] [class]" - "today got class", "harini ada kelas"
+    if re.search(rf"{TODAY_WORDS}\s*{QUESTION_WORDS}?\s*{CLASS_WORDS}", message_lower):
         return ClassificationResult(
             intent=Intent.QUERY_TODAY_CLASSES,
             entities=ParsedEntities(),
             confidence=0.95
         )
-    if re.search(r"kelas\s+(hari\s+)?ini", message_lower):
+    # Pattern 3: "[class] [today] [question]" - "kelas harini apa je", "class today?"
+    if re.search(rf"{CLASS_WORDS}\s*{TODAY_WORDS}\s*{QUESTION_WORDS}?", message_lower):
         return ClassificationResult(
             intent=Intent.QUERY_TODAY_CLASSES,
             entities=ParsedEntities(),
             confidence=0.95
         )
-    if re.search(r"jadual\s+hari\s+ini", message_lower):
+    # Pattern 4: "[question] [today] [class]" - "apa harini kelas", "what today class"
+    if re.search(rf"{QUESTION_WORDS}\s*{TODAY_WORDS}\s*{CLASS_WORDS}", message_lower):
         return ClassificationResult(
             intent=Intent.QUERY_TODAY_CLASSES,
             entities=ParsedEntities(),
             confidence=0.95
+        )
+    # Pattern 5: Schedule variants - "jadual harini", "schedule today", "my schedule"
+    if re.search(rf"(jadual|sched|schedule)\s*{TODAY_WORDS}", message_lower):
+        return ClassificationResult(
+            intent=Intent.QUERY_TODAY_CLASSES,
+            entities=ParsedEntities(),
+            confidence=0.95
+        )
+    # Pattern 6: Super short - just "class?" or "kelas?" with today context implied
+    if re.search(rf"^{CLASS_WORDS}\??$", message_lower):
+        return ClassificationResult(
+            intent=Intent.QUERY_TODAY_CLASSES,
+            entities=ParsedEntities(),
+            confidence=0.80  # Lower confidence for ambiguous
         )
 
     # Midterm break query (English and Malay)

@@ -220,12 +220,14 @@ async def confirm_timetable(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             saved_count += 1
 
         await update.message.reply_text(
-            f"Saved {saved_count} class slots!\n\n"
-            "Setup complete! You're all set.\n\n"
-            "You can now:\n"
-            "- Ask me about your classes\n"
-            "- Add assignments, tasks, and TODOs\n"
-            "- Send me assignment images to add them\n\n"
+            f"✅ Saved {saved_count} class slots!\n\n"
+            "🎉 Setup complete! You're all set.\n\n"
+            "Try these:\n"
+            "📅 \"What's my schedule tomorrow?\"\n"
+            "📝 \"Assignment report BITP1113 due Friday 5pm\"\n"
+            "✅ \"Remind me to buy groceries at 3pm\"\n"
+            "🎤 Send a voice note to transcribe\n"
+            "📸 Send an assignment image to add it\n\n"
             "Use /help to see all available commands."
         )
         context.user_data.pop("pending_schedule", None)
@@ -261,15 +263,19 @@ async def skip_step(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     elif current_state in (OnboardingState.WAITING_TIMETABLE.value,
                            OnboardingState.CONFIRM_TIMETABLE.value):
         await update.message.reply_text(
-            "Skipping timetable setup.\n\n"
-            "Setup complete! You can add calendar and timetable later using /setup.\n"
+            "⏭️ Skipping timetable setup.\n\n"
+            "✅ Setup complete! You can add calendar and timetable later using /setup.\n\n"
+            "Try these:\n"
+            "📝 \"Assignment report BITP1113 due Friday 5pm\"\n"
+            "✅ \"Remind me to buy groceries at 3pm\"\n"
+            "🎤 Send a voice note to transcribe\n\n"
             "Use /help to see all available commands."
         )
         return ConversationHandler.END
 
     else:
         await update.message.reply_text(
-            "Setup complete! Use /help to see available commands."
+            "✅ Setup complete! Use /help to see available commands."
         )
         return ConversationHandler.END
 
@@ -443,7 +449,7 @@ def format_today_classes(schedule: list[dict], events: list[dict], today: date =
 def format_week_schedule(schedule: list[dict]) -> str:
     """Format the full week schedule for display."""
     if not schedule:
-        return "No classes in your schedule!"
+        return "📅 No classes in your schedule!\n\nUse /setup to upload your timetable image."
 
     # Group by day
     by_day = {}
@@ -478,7 +484,7 @@ def format_week_schedule(schedule: list[dict]) -> str:
 def format_pending_assignments(assignments: list[dict]) -> str:
     """Format pending assignments for display."""
     if not assignments:
-        return "No pending assignments!"
+        return "📝 No pending assignments!\n\nTry: \"Assignment report BITP1113 due Friday 5pm\""
 
     lines = [f"{len(assignments)} pending assignment(s):"]
     for a in assignments:
@@ -509,7 +515,7 @@ def format_pending_assignments(assignments: list[dict]) -> str:
 def format_pending_tasks(tasks: list[dict]) -> str:
     """Format upcoming tasks for display."""
     if not tasks:
-        return "No upcoming tasks!"
+        return "📋 No upcoming tasks!\n\nTry: \"Meet Dr Intan tomorrow 10am\""
 
     lines = [f"{len(tasks)} upcoming task(s):"]
     for t in tasks:
@@ -538,7 +544,7 @@ def format_pending_tasks(tasks: list[dict]) -> str:
 def format_pending_todos(todos: list[dict]) -> str:
     """Format pending TODOs for display."""
     if not todos:
-        return "No pending TODOs!"
+        return "✅ No pending TODOs!\n\nTry: \"Remind me buy groceries at 3pm\""
 
     lines = [f"{len(todos)} pending TODO(s):"]
     for t in todos:

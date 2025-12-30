@@ -26,50 +26,49 @@ pip install -r requirements.txt
 
 ### Entry Points
 - `src/main.py` - Main entry point; initializes database, registers handlers, starts scheduler
-- `run.py` - Alternative run script (simpler, without scheduler lifecycle hooks)
+- `src/config.py` - Settings & environment loading
 
 ### Core Components
 
 **Bot Layer** (`src/bot/`)
-- `handlers.py` - Telegram command handlers and message routing by intent. Handles text, photos, and voice messages. Contains debug commands (`/setdate`, `/settime`, `/trigger`) for testing.
+- `handlers.py` - Telegram command handlers and message routing by intent. Handles text, photos, and voice. Debug commands: `/setdate`, `/settime`, `/trigger`
 - `conversations.py` - Multi-step conversation flows (onboarding, assignment confirmation) and response formatters
-- `keyboards.py` - Telegram inline keyboard layouts (main menu, settings, voice processing options, note actions)
+- `keyboards.py` - Inline keyboard layouts (main menu, settings, voice options). Settings keyboard shows date/time override status
 
 **AI Layer** (`src/ai/`)
-- `gemini_client.py` - Google Gemini API wrapper (singleton via `get_gemini_client()`). Supports:
-  - Text prompts (`send_text`)
-  - Image analysis (`send_image`, `send_image_with_json`)
-  - Audio transcription (`transcribe_audio`, `process_audio_content`)
-  - AI suggestions (`get_ai_suggestions`)
-- `intent_parser.py` - NLP intent classification with `Intent` enum. Uses regex for common queries, Gemini for complex messages.
+- `gemini_client.py` - Google Gemini API wrapper (singleton via `get_gemini_client()`)
+- `intent_parser.py` - NLP intent classification with `Intent` enum. Regex patterns checked first (lab tests, week queries, class queries), then Gemini for complex messages
 - `image_parser.py` - Detects image types (calendar, timetable, assignment) and extracts structured data
 
 **Database Layer** (`src/database/`)
-- `models.py` - SQLite schema. Tables: user_config, events, schedule, assignments, tasks, todos, online_overrides, voice_notes, action_history, notification_settings
-- `operations.py` - `DatabaseOperations` class with CRUD methods for all tables
+- `models.py` - SQLite schema (user_config, events, schedule, assignments, tasks, todos, voice_notes, etc.)
+- `operations.py` - `DatabaseOperations` class with CRUD methods. `get_subject_aliases()` builds name→code mappings from schedule
 
 **Scheduler** (`src/scheduler/`)
-- `notifications.py` - `NotificationScheduler` class using APScheduler. Daily briefings include AI-powered suggestions when pending items exist.
+- `notifications.py` - APScheduler-based. Notification schedule:
+  - 10:00 PM: Tomorrow's classes briefing
+  - 8:00 PM: Off-day alert
+  - 12:00 AM: Midnight TODO review
+  - Every 30 min: Assignment/Task/TODO reminder checks
 
 **Utils** (`src/utils/`)
-- `semester_logic.py` - Week calculation (14-week semester with mid-break), break classification, date helpers
+- `semester_logic.py` - Week calculation (14-week semester with mid-break), `get_today()`, `get_now()`
 - `translations.py` - Multi-language support (English/Malay) via `get_text(key, lang)`
-
-### Data Flow
-1. User sends message/image/voice to Telegram
-2. `handlers.py` receives via python-telegram-bot
-3. For text: `intent_parser.py` classifies intent using regex or Gemini
-4. For images: `image_parser.py` detects type and extracts data
-5. For voice: `gemini_client.py` transcribes, then user selects processing type
-6. Handler executes action (database CRUD via `operations.py`)
-7. Response includes inline keyboard for menu persistence
 
 ### Key Patterns
 - **Timezone**: All times use `Asia/Kuala_Lumpur` (MY_TZ)
-- **Test Overrides**: `get_today()` and `get_now()` support `_test_date_override` / `_test_time_override`
+- **Test Overrides**: `get_today()` and `get_now()` support `_test_date_override` / `_test_time_override`. Settings menu shows override status with reset buttons
 - **Semester Structure**: 14 weeks (Week 1-6, mid-break, Week 7-14, inter-semester break)
-- **Menu Persistence**: Inline keyboards remain visible after button presses via `get_content_with_menu_keyboard()`
+- **Assignment Reminders**: 7-level escalation (3 days → 2 days → 1 day → 8 hours → 3 hours → 1 hour → due)
+- **Subject Aliases**: `get_subject_aliases()` maps subject names/abbreviations to codes (e.g., "os" → "BITI1213"). Used for NLP matching
+- **Lab Test/Exam**: When adding exams via NLP, system looks up schedule to find actual day/time for the subject's class type (LAB/LEC)
 - **Callback Handling**: All inline button callbacks go through `callback_query_handler()` in handlers.py
+
+### Voice Notes Flow
+1. User sends voice message → `handle_voice_message()` transcribes via Gemini
+2. User selects processing type (summary, minutes, tasks, study notes, transcript)
+3. Processed content saved to `voice_notes` table
+4. `/notes` command lists and manages saved notes
 
 ## Environment Variables
 
@@ -79,19 +78,17 @@ GEMINI_API_KEY=<Google Gemini API key>
 DATABASE_PATH=data/bot.db  (optional, defaults to data/bot.db)
 ```
 
-## Testing Debug Commands
+## Debug Commands
 
 - `/setdate YYYY-MM-DD` - Override current date
 - `/settime HH:MM` - Override current time
-- `/trigger <type>` - Manually trigger notifications (briefing, offday, midnight, assignments, tasks, todos, semester)
+- `/trigger <type>` - Trigger notifications: briefing, offday, midnight, assignments, tasks, todos, semester
+- Settings menu shows current date/time with override warnings and reset buttons
 
-## Adding New Features
+## Adding Features
 
-When adding features:
-1. Add database table/columns in `models.py` if needed
-2. Add CRUD operations in `operations.py`
-3. Add command handler in `handlers.py` and register in `register_handlers()`
-4. Add callback handlers in `callback_query_handler()` for inline buttons
-5. Add keyboard layouts in `keyboards.py` if interactive UI needed
-6. Add intent patterns in `intent_parser.py` for natural language support
-7. Add translations in `translations.py` for multi-language support
+1. Database: Add table/columns in `models.py`, CRUD in `operations.py`
+2. Bot: Add handler in `handlers.py`, register in `register_handlers()`
+3. UI: Add callbacks in `callback_query_handler()`, keyboards in `keyboards.py`
+4. NLP: Add regex patterns in `intent_parser.py` (before Gemini fallback for common patterns)
+5. i18n: Add translations in `translations.py`
