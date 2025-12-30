@@ -115,6 +115,32 @@ logger = logging.getLogger(__name__)
 db = DatabaseOperations(config.DATABASE_PATH)
 
 
+def is_authorized(user_id: int) -> bool:
+    """Check if the user is authorized to use the bot."""
+    return user_id == config.ALLOWED_USER_ID
+
+
+async def check_authorization(update: Update) -> bool:
+    """Check authorization and send rejection message if unauthorized. Returns True if authorized."""
+    user_id = update.effective_user.id if update.effective_user else None
+    if not user_id or not is_authorized(user_id):
+        if update.message:
+            await update.message.reply_text("⛔ Unauthorized. This bot is private.")
+        elif update.callback_query:
+            await update.callback_query.answer("⛔ Unauthorized", show_alert=True)
+        return False
+    return True
+
+
+def authorized(func):
+    """Decorator to restrict handler to authorized users only."""
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not await check_authorization(update):
+            return
+        return await func(update, context)
+    return wrapper
+
+
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /start command - welcome message and setup."""
     chat_id = update.effective_chat.id
@@ -2930,56 +2956,56 @@ def register_handlers(application: Application) -> None:
     # Add onboarding conversation handler first (higher priority)
     application.add_handler(get_onboarding_handler())
 
-    # Command handlers
-    application.add_handler(CommandHandler("start", start_command))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("menu", menu_command))
-    application.add_handler(CommandHandler("status", status_command))
-    application.add_handler(CommandHandler("tomorrow", tomorrow_command))
-    application.add_handler(CommandHandler("today", today_command))
-    application.add_handler(CommandHandler("week", week_command))
-    application.add_handler(CommandHandler("week_number", week_number_command))
-    application.add_handler(CommandHandler("setsemester", setsemester_command))
-    application.add_handler(CommandHandler("offday", offday_command))
-    application.add_handler(CommandHandler("assignments", assignments_command))
-    application.add_handler(CommandHandler("tasks", tasks_command))
-    application.add_handler(CommandHandler("todos", todos_command))
-    application.add_handler(CommandHandler("done", done_command))
-    application.add_handler(CommandHandler("edit", edit_command))
-    application.add_handler(CommandHandler("online", online_command))
-    application.add_handler(CommandHandler("setonline", setonline_command))
+    # Command handlers (all wrapped with authorized decorator)
+    application.add_handler(CommandHandler("start", authorized(start_command)))
+    application.add_handler(CommandHandler("help", authorized(help_command)))
+    application.add_handler(CommandHandler("menu", authorized(menu_command)))
+    application.add_handler(CommandHandler("status", authorized(status_command)))
+    application.add_handler(CommandHandler("tomorrow", authorized(tomorrow_command)))
+    application.add_handler(CommandHandler("today", authorized(today_command)))
+    application.add_handler(CommandHandler("week", authorized(week_command)))
+    application.add_handler(CommandHandler("week_number", authorized(week_number_command)))
+    application.add_handler(CommandHandler("setsemester", authorized(setsemester_command)))
+    application.add_handler(CommandHandler("offday", authorized(offday_command)))
+    application.add_handler(CommandHandler("assignments", authorized(assignments_command)))
+    application.add_handler(CommandHandler("tasks", authorized(tasks_command)))
+    application.add_handler(CommandHandler("todos", authorized(todos_command)))
+    application.add_handler(CommandHandler("done", authorized(done_command)))
+    application.add_handler(CommandHandler("edit", authorized(edit_command)))
+    application.add_handler(CommandHandler("online", authorized(online_command)))
+    application.add_handler(CommandHandler("setonline", authorized(setonline_command)))
 
     # New feature commands
-    application.add_handler(CommandHandler("exams", exams_command))
-    application.add_handler(CommandHandler("setexam", setexam_command))
-    application.add_handler(CommandHandler("delete", delete_command))
-    application.add_handler(CommandHandler("schedule", schedule_subject_command))
-    application.add_handler(CommandHandler("stats", stats_command))
-    application.add_handler(CommandHandler("search", search_command))
-    application.add_handler(CommandHandler("undo", undo_command))
-    application.add_handler(CommandHandler("mute", mute_command))
-    application.add_handler(CommandHandler("settings", settings_command))
-    application.add_handler(CommandHandler("language", language_command))
-    application.add_handler(CommandHandler("export", export_command))
+    application.add_handler(CommandHandler("exams", authorized(exams_command)))
+    application.add_handler(CommandHandler("setexam", authorized(setexam_command)))
+    application.add_handler(CommandHandler("delete", authorized(delete_command)))
+    application.add_handler(CommandHandler("schedule", authorized(schedule_subject_command)))
+    application.add_handler(CommandHandler("stats", authorized(stats_command)))
+    application.add_handler(CommandHandler("search", authorized(search_command)))
+    application.add_handler(CommandHandler("undo", authorized(undo_command)))
+    application.add_handler(CommandHandler("mute", authorized(mute_command)))
+    application.add_handler(CommandHandler("settings", authorized(settings_command)))
+    application.add_handler(CommandHandler("language", authorized(language_command)))
+    application.add_handler(CommandHandler("export", authorized(export_command)))
 
     # Voice notes and AI suggestions
-    application.add_handler(CommandHandler("notes", notes_command))
-    application.add_handler(CommandHandler("suggest", suggest_command))
+    application.add_handler(CommandHandler("notes", authorized(notes_command)))
+    application.add_handler(CommandHandler("suggest", authorized(suggest_command)))
 
     # Debug commands
-    application.add_handler(CommandHandler("setdate", setdate_command))
-    application.add_handler(CommandHandler("resetdate", resetdate_command))
-    application.add_handler(CommandHandler("settime", settime_command))
-    application.add_handler(CommandHandler("resettime", resettime_command))
-    application.add_handler(CommandHandler("trigger", trigger_command))
+    application.add_handler(CommandHandler("setdate", authorized(setdate_command)))
+    application.add_handler(CommandHandler("resetdate", authorized(resetdate_command)))
+    application.add_handler(CommandHandler("settime", authorized(settime_command)))
+    application.add_handler(CommandHandler("resettime", authorized(resettime_command)))
+    application.add_handler(CommandHandler("trigger", authorized(trigger_command)))
 
     # Callback query handler for inline keyboards
-    application.add_handler(CallbackQueryHandler(callback_query_handler))
+    application.add_handler(CallbackQueryHandler(authorized(callback_query_handler)))
 
     # Message handlers (lower priority than commands)
-    application.add_handler(MessageHandler(filters.PHOTO, handle_photo_message))
-    application.add_handler(MessageHandler(filters.VOICE, handle_voice_message))
+    application.add_handler(MessageHandler(filters.PHOTO, authorized(handle_photo_message)))
+    application.add_handler(MessageHandler(filters.VOICE, authorized(handle_voice_message)))
     application.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND,
-        handle_text_message
+        authorized(handle_text_message)
     ))

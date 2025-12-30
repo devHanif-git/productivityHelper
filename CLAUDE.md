@@ -57,6 +57,7 @@ pip install -r requirements.txt
 
 ### Key Patterns
 - **Timezone**: All times use `Asia/Kuala_Lumpur` (MY_TZ)
+- **Authorization**: All handlers wrapped with `authorized()` decorator in `register_handlers()`. Uses `ALLOWED_USER_ID` from config
 - **Test Overrides**: `get_today()` and `get_now()` support `_test_date_override` / `_test_time_override`. Settings menu shows override status with reset buttons
 - **Semester Structure**: 14 weeks (Week 1-6, mid-break, Week 7-14, inter-semester break)
 - **Subject Aliases**: `get_subject_aliases()` maps subject names/abbreviations to codes (e.g., "os" → "BITI1213", "sp" → "Statistics and Probability"). Skips filler words (and, or, of) when building abbreviations
@@ -104,6 +105,7 @@ All reminders are checked every 30 minutes. Each level triggers only once per it
 TELEGRAM_TOKEN=<bot token from @BotFather>
 GEMINI_API_KEY=<Google Gemini API key>
 DATABASE_PATH=data/bot.db  (optional, defaults to data/bot.db)
+ALLOWED_USER_ID=561393547  (optional, restricts bot to single user)
 ```
 
 ## Debug Commands
@@ -116,7 +118,24 @@ DATABASE_PATH=data/bot.db  (optional, defaults to data/bot.db)
 ## Adding Features
 
 1. Database: Add table/columns in `models.py`, CRUD in `operations.py`
-2. Bot: Add handler in `handlers.py`, register in `register_handlers()`
+2. Bot: Add handler in `handlers.py`, wrap with `authorized()` in `register_handlers()`
 3. UI: Add callbacks in `callback_query_handler()`, keyboards in `keyboards.py`
 4. NLP: Add regex patterns in `intent_parser.py` (before Gemini fallback for common patterns)
 5. i18n: Add translations in `translations.py`
+
+## Production Deployment
+
+Use `productivity-bot.service` for systemd deployment:
+```bash
+# Edit service file with your username
+sed -i 's/your_username/'"$USER"'/g' productivity-bot.service
+
+# Install and start
+sudo cp productivity-bot.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable productivity-bot
+sudo systemctl start productivity-bot
+
+# View logs
+sudo journalctl -u productivity-bot -f
+```

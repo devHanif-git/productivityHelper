@@ -1,0 +1,24 @@
+[Unit]
+Description=UTeM Student Assistant Telegram Bot
+After=network.target
+
+[Service]
+Type=simple
+User=your_username
+WorkingDirectory=/home/your_username/productivity
+Environment=PATH=/home/your_username/productivity/venv/bin
+EnvironmentFile=/home/your_username/productivity/.env
+ExecStart=/home/your_username/productivity/venv/bin/python -m src.main
+Restart=always
+RestartSec=10
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+
+# Security hardening (optional but recommended)
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

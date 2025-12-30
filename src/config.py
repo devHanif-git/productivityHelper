@@ -30,6 +30,9 @@ class Config:
     # Timezone
     TIMEZONE: str = "Asia/Kuala_Lumpur"
 
+    # Allowed user ID (only this user can use the bot)
+    ALLOWED_USER_ID: int = int(os.getenv("ALLOWED_USER_ID", "561393547"))
+
     @classmethod
     def validate(cls) -> list[str]:
         """Validate required configuration. Returns list of missing keys."""
