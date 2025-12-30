@@ -256,281 +256,280 @@ ALTER TABLE events ADD COLUMN subject_code TEXT;
 
 ---
 
-## FUTURE IMPLEMENTATION (Backlog)
+## RECENTLY IMPLEMENTED FEATURES
 
-### Priority 1: High Value Features
+### Priority 1: High Value Features - DONE
 
 #### Feature: Set Exam Dates Per Subject
-**Status:** Not implemented (only query existing calendar events works)
+**Status:** ✅ IMPLEMENTED
 **Description:** Allow users to manually set exam dates for specific subjects
 
-**Schema change:**
-```sql
-ALTER TABLE events ADD COLUMN subject_code TEXT;
-```
-
-**New commands:**
+**Commands:**
 - `/setexam <subject> <type> <date> [time]` - Set exam date
 - `/exams` - List all upcoming exams
+- Natural language: "final exam BITP1113 on 15 Jan 2025"
 
-**Examples:**
-```
-/setexam BITP1113 final 2025-01-15
-/setexam BITI1213 midterm 2024-12-20 10:00
-"Final exam BITP1113 on 15 Jan 2025"
-"Midterm BITI1213 on 20 Dec 10am"
-```
-
-**Files to modify:**
-- `src/database/models.py` - Add subject_code to events
-- `src/database/operations.py` - Add exam-specific CRUD
-- `src/bot/handlers.py` - Add /setexam, /exams commands
-- `src/ai/intent_parser.py` - Add ADD_EXAM intent
+**Files modified:**
+- `src/database/models.py` - Added `subject_code` to events table
+- `src/database/operations.py` - Added `add_exam()`, `get_upcoming_exams()`, `get_exams_for_subject()`
+- `src/bot/handlers.py` - Added `/setexam`, `/exams` commands
+- `src/ai/intent_parser.py` - Added `ADD_EXAM`, `QUERY_EXAMS` intents
 
 ---
 
 #### Feature: Delete/Remove Items
-**Status:** Not implemented
-**Description:** Allow users to delete assignments, tasks, todos, online overrides
+**Status:** ✅ IMPLEMENTED
+**Description:** Allow users to delete assignments, tasks, todos, online overrides, events
 
-**New commands:**
+**Commands:**
 - `/delete <type> <id>` - Delete item with confirmation
 - Natural language: "delete assignment 5", "remove todo 3"
 
-**Examples:**
-```
-/delete assignment 5
-/delete online 1
-"delete task 3"
-"remove the quiz assignment"
-```
+**Files modified:**
+- `src/database/operations.py` - Added `delete_assignment()`, `delete_task()`, `delete_todo()`, `delete_event()`
+- `src/bot/handlers.py` - Added `/delete` command with confirmation flow
+- `src/ai/intent_parser.py` - Added `DELETE_ITEM` intent
 
 ---
 
 #### Feature: View Schedule by Subject
-**Status:** Not implemented
+**Status:** ✅ IMPLEMENTED
 **Description:** Query schedule for a specific subject
 
-**New commands:**
-- `/schedule <subject>` - Show all slots for a subject
+**Commands:**
+- `/schedule <subject>` - Show all slots for a subject (by code or name)
 
-**Examples:**
-```
-/schedule BITP1113
-"when is database design class"
-"bila kelas programming"
-```
+**Files modified:**
+- `src/database/operations.py` - Added `get_schedule_by_subject()`
+- `src/bot/handlers.py` - Added `/schedule` command
 
 ---
 
-### Priority 2: UI Improvements
+### Priority 2: UI Improvements - DONE
 
 #### Feature: Telegram Inline Keyboards
-**Status:** Not implemented
-**Complexity:** HIGH
-**Description:** Replace slash commands with interactive buttons
+**Status:** ✅ IMPLEMENTED
+**Description:** Interactive button menus for common actions
 
-**Implementation approach:**
-1. Add `InlineKeyboardMarkup` to key responses
-2. Create menu flows for common actions
-3. Add callback query handlers
+**Commands:**
+- `/menu` - Show main interactive menu
+- `/settings` - Show settings menu
+
+**Files created/modified:**
+- `src/bot/keyboards.py` - NEW FILE with all keyboard layouts
+- `src/bot/handlers.py` - Added `callback_query_handler()` for button callbacks
 
 **Menu structure:**
-```
-Main Menu:
-[📅 Schedule] [📝 Tasks]
-[📚 Assignments] [✅ TODOs]
-[⚙️ Settings] [❓ Help]
-
-Schedule Menu:
-[Today] [Tomorrow] [This Week]
-[Set Online] [Edit Room]
-[🔙 Back]
-```
-
-**Files to modify:**
-- `src/bot/handlers.py` - Add callback handlers
-- `src/bot/keyboards.py` - New file for keyboard layouts
-- All command handlers - Add keyboard responses
+- Main Menu: Today, Tomorrow, Assignments, Tasks, TODOs, Stats, Settings, Help
+- Settings Menu: Notifications, Language, Mute options
+- Language Menu: English, Bahasa Melayu
 
 ---
 
 #### Feature: Quick Action Buttons
-**Status:** Not implemented
-**Description:** Add action buttons to list responses
+**Status:** ✅ IMPLEMENTED
+**Description:** Action buttons for items (Done, Edit, Delete)
 
-**Example:** When showing assignments:
-```
-📚 3 pending assignments:
-[ID:5] Report (BITP1113) - due Fri 5PM
-  [✅ Done] [✏️ Edit] [🗑️ Delete]
-
-[ID:8] Quiz (BITI1213) - due Mon 10AM
-  [✅ Done] [✏️ Edit] [🗑️ Delete]
-```
+**Implementation:**
+- `get_item_actions_keyboard()` - Creates [✅ Done] [✏️ Edit] [🗑️ Delete] buttons
+- `get_confirmation_keyboard()` - Creates [Yes] [No] confirmation
+- Callback handlers for all button actions
 
 ---
 
-### Priority 3: Enhanced Features
+### Priority 3: Enhanced Features - DONE
 
 #### Feature: Recurring Tasks/Reminders
-**Status:** Not implemented
+**Status:** ✅ IMPLEMENTED (Schema ready)
 **Description:** Support for weekly/monthly recurring items
 
-**Schema change:**
-```sql
-ALTER TABLE tasks ADD COLUMN recurrence TEXT; -- 'daily', 'weekly', 'monthly'
-ALTER TABLE tasks ADD COLUMN recurrence_end TEXT;
-```
+**Schema changes:**
+- `tasks` table: Added `recurrence`, `recurrence_end`, `parent_task_id` columns
 
-**Examples:**
-```
-"Remind me to submit report every Friday"
-"Weekly meeting with advisor on Monday 2pm"
-```
+**Files modified:**
+- `src/database/models.py` - Schema updated
+- `src/database/operations.py` - Added `add_recurring_task()`, `get_recurring_tasks()`, `create_recurring_instance()`
 
 ---
 
 #### Feature: Export Data
-**Status:** Not implemented
-**Description:** Export schedule, assignments to file/calendar format
+**Status:** ✅ IMPLEMENTED
+**Description:** Export schedule, assignments to file format
 
-**New commands:**
-- `/export schedule` - Export as text/image
-- `/export ical` - Export to iCal format
-- `/export all` - Full data backup
+**Commands:**
+- `/export schedule` - Export as Markdown file
+- `/export assignments` - Export pending assignments
+- `/export all` - Full data backup (JSON)
+
+**Files modified:**
+- `src/bot/handlers.py` - Added `/export` command
+- `src/bot/keyboards.py` - Added `get_export_keyboard()`
 
 ---
 
 #### Feature: Statistics & Analytics
-**Status:** Not implemented
+**Status:** ✅ IMPLEMENTED
 **Description:** Show completion rates, productivity stats
 
-**New commands:**
-- `/stats` - Show weekly/monthly stats
-- `/stats assignments` - Assignment completion rate
+**Commands:**
+- `/stats [days]` - Show stats for past N days (default 7)
+- Natural language: "show my stats"
 
-**Example output:**
-```
-📊 This Week's Stats:
-- Assignments: 5/7 completed (71%)
-- Tasks: 8/10 completed (80%)
-- TODOs: 12/15 completed (80%)
-- Classes attended: 15/18
-```
+**Files modified:**
+- `src/database/operations.py` - Added `get_completion_stats()`, `get_pending_counts()`
+- `src/bot/handlers.py` - Added `/stats` command
+- `src/ai/intent_parser.py` - Added `QUERY_STATS` intent
 
 ---
 
 #### Feature: Notification Customization
-**Status:** Not implemented
-**Description:** Let users customize reminder times/frequency
+**Status:** ✅ IMPLEMENTED
+**Description:** Customize notification settings and mute
 
-**New commands:**
-- `/settings notifications` - Open notification settings
+**Commands:**
+- `/settings` - Open settings menu with notification toggles
 - `/mute <hours>` - Temporarily mute notifications
+- Natural language: "mute for 2 hours"
 
-**Settings:**
-- Daily briefing time (default 10PM)
-- Assignment reminder intervals
-- Enable/disable specific notification types
+**Schema changes:**
+- `user_config` table: Added `muted_until` column
+- New table: `notification_settings` for per-user settings
+
+**Files modified:**
+- `src/database/models.py` - Schema updated
+- `src/database/operations.py` - Added `set_notification_setting()`, `is_muted()`, `set_mute_until()`
+- `src/scheduler/notifications.py` - Checks mute status before sending
+- `src/ai/intent_parser.py` - Added `MUTE_NOTIFICATIONS` intent
 
 ---
 
-### Priority 4: Quality of Life
+### Priority 4: Quality of Life - DONE
 
 #### Feature: Undo Last Action
-**Status:** Not implemented
-**Description:** Undo the last action (complete, delete, edit)
+**Status:** ✅ IMPLEMENTED
+**Description:** Undo the last action (add, delete, complete)
 
-**Command:**
+**Commands:**
 - `/undo` - Undo last action
+
+**Schema changes:**
+- New table: `action_history` (action_type, table_name, item_id, old_data, new_data)
+
+**Files modified:**
+- `src/database/models.py` - Added `action_history` table
+- `src/database/operations.py` - Added `add_action_history()`, `get_last_action()`, `delete_action_history()`
+- `src/bot/handlers.py` - Added `/undo` command
 
 ---
 
 #### Feature: Search Everything
-**Status:** Not implemented
+**Status:** ✅ IMPLEMENTED
 **Description:** Global search across all data
 
-**Command:**
-- `/search <query>` - Search assignments, tasks, todos, schedule
+**Commands:**
+- `/search <query>` - Search assignments, tasks, todos, schedule, events
+- Natural language: "search database", "find report"
 
-**Example:**
-```
-/search database
-> Found 3 results:
-> 📚 Assignment: Database report (due Fri)
-> 📅 Schedule: BITI1213 Database Design (Mon 8AM)
-> ✅ TODO: Review database notes
-```
+**Files modified:**
+- `src/database/operations.py` - Added `search_all()`
+- `src/bot/handlers.py` - Added `/search` command
+- `src/ai/intent_parser.py` - Added `SEARCH_ALL` intent
 
 ---
 
 #### Feature: Snooze Reminders
-**Status:** Not implemented
-**Description:** Snooze a reminder for later
+**Status:** ✅ IMPLEMENTED
+**Description:** Snooze buttons on reminder notifications
 
 **Implementation:**
-When reminder is sent, add buttons:
-```
-⏰ Assignment "Report" is due in 3 hours!
-[Snooze 30min] [Snooze 1hr] [✅ Done]
-```
+- `get_snooze_keyboard()` - Creates [30 min] [1 hour] [2 hours] [✅ Done] buttons
+- Callback handler for snooze actions
 
 ---
 
 #### Feature: Multi-language Full Support
-**Status:** Partial (some Malay regex patterns)
-**Description:** Full Malay language support for all features
+**Status:** ✅ IMPLEMENTED
+**Description:** Full English and Malay language support
 
-**To implement:**
-- All response messages in both EN/MY
-- Language preference in user settings
-- `/language` command to switch
+**Commands:**
+- `/language <en|my>` - Set language preference
+- Natural language: "set language to malay", "tukar bahasa"
+
+**Files created/modified:**
+- `src/utils/translations.py` - NEW FILE with EN/MY translations
+- `src/database/models.py` - Added `language` column to `user_config`
+- `src/database/operations.py` - Added `set_language()`, `get_language()`
+- `src/ai/intent_parser.py` - Added `SET_LANGUAGE` intent
 
 ---
+
+## FUTURE IMPLEMENTATION (Backlog)
+
+### Still To Be Implemented
 
 #### Feature: Group Chat Support
 **Status:** Not implemented
+**Priority:** Medium
 **Description:** Support for class group chats
 
-**Features:**
+**Features to implement:**
 - Shared class schedule for group
 - Group assignments/deadlines
 - @mentions for reminders
+- Per-group settings vs per-user settings
 
 ---
 
-### Priority 5: Advanced Features
-
 #### Feature: AI-Powered Suggestions
 **Status:** Not implemented
+**Priority:** Low
 **Description:** Use Gemini to suggest task priorities, study times
 
 **Examples:**
 - "You have 3 assignments due this week. I suggest starting with Database report as it's worth more marks."
 - "Based on your schedule, you have free time Tuesday afternoon for studying."
 
+**Implementation approach:**
+- Analyze user's pending items and schedule
+- Send context to Gemini for prioritization suggestions
+- Proactive suggestions during daily briefings
+
 ---
 
 #### Feature: Calendar Sync
 **Status:** Not implemented
+**Priority:** Low
 **Description:** Two-way sync with Google Calendar
 
-**Features:**
+**Features to implement:**
 - Import events from Google Calendar
 - Export schedule to Google Calendar
 - Sync assignment deadlines
+- OAuth2 authentication flow
+
+**Complexity:** HIGH (requires Google API integration)
 
 ---
 
 #### Feature: Voice Messages
 **Status:** Not implemented
+**Priority:** Low
 **Description:** Accept voice messages for adding items
 
-**Implementation:**
-- Use Telegram voice message API
-- Transcribe with Gemini
-- Process as text input
+**Implementation approach:**
+- Use Telegram voice message API to receive audio
+- Send to Gemini for transcription
+- Process transcribed text as normal message
+
+---
+
+#### Feature: iCal Export
+**Status:** Not implemented
+**Priority:** Low
+**Description:** Export to standard iCal format for calendar apps
+
+**Commands to add:**
+- `/export ical` - Generate .ics file
 
 ---
 

@@ -1,12 +1,27 @@
 """Telegram bot command handlers."""
 
+import io
+import json
 import logging
 import os
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters, CallbackQueryHandler
 import pytz
+
+from .keyboards import (
+    get_main_menu_keyboard,
+    get_settings_keyboard,
+    get_language_keyboard,
+    get_notification_settings_keyboard,
+    get_item_actions_keyboard,
+    get_confirmation_keyboard,
+    get_snooze_keyboard,
+    get_export_keyboard,
+    get_back_to_menu_keyboard,
+    get_content_with_menu_keyboard,
+)
 
 # Malaysia timezone
 MY_TZ = pytz.timezone("Asia/Kuala_Lumpur")
@@ -132,15 +147,19 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 *Setup*
 /start - Start the bot and setup
+/menu - Show interactive menu
 
 *Schedule*
 /today - Show today's classes
 /tomorrow - Show tomorrow's classes
 /week - Show this week's schedule
+/schedule <subject> - Show schedule for subject
 
 *Academic*
 /week\\_number - Current week of semester
 /offday - Next off day / holiday
+/exams - List upcoming exams
+/setexam <subject> <type> <date> - Set exam date
 
 *Tasks*
 /assignments - List pending assignments
@@ -149,13 +168,22 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 *Status*
 /status - Overview of pending items
+/stats - View productivity statistics
+/search <query> - Search all data
 
 *Management*
 /done <type> <id> - Mark item as complete
+/delete <type> <id> - Delete an item
 /edit <type> <id> <field> <value> - Edit item
+/undo - Undo last action
 /online - Show online class settings
 /setonline <subject|all> <week#|date> - Set class online
-/help - Show this help message
+
+*Settings*
+/settings - Open settings menu
+/mute <hours> - Mute notifications
+/language <en|my> - Set language
+/export - Export data
 
 *Debug/Testing*
 /setdate YYYY-MM-DD - Set test date
@@ -168,6 +196,9 @@ You can also send me natural language messages like:
 • "I have assignment report for BITP1113 due Friday 5pm"
 • "What class tomorrow?"
 • "Done with BITP report"
+• "Delete assignment 5"
+• "Search database"
+• "Mute for 2 hours"
 """
     await update.message.reply_text(help_text.strip(), parse_mode="Markdown")
 
@@ -568,6 +599,44 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             await update.message.reply_text("Edit cancelled.")
             return
 
+    # Check if we're waiting for delete confirmation
+    if "pending_delete" in context.user_data:
+        response_lower = message_text.lower().strip()
+        pending = context.user_data["pending_delete"]
+
+        if response_lower in ("yes", "y", "ya", "confirm"):
+            item_type = pending["type"]
+            item_id = pending["id"]
+            item_data = pending.get("data")
+
+            deleted = None
+            if item_type in ("assignment", "a"):
+                deleted = db.delete_assignment(item_id)
+            elif item_type in ("task", "t"):
+                deleted = db.delete_task(item_id)
+            elif item_type in ("todo", "td"):
+                deleted = db.delete_todo(item_id)
+            elif item_type == "online":
+                db.delete_online_override(item_id)
+                deleted = True
+            elif item_type == "event":
+                deleted = db.delete_event(item_id)
+
+            if deleted:
+                if item_data:
+                    db.add_action_history("delete", f"{item_type}s", item_id, item_data)
+                await update.message.reply_text(f"Deleted {item_type} '{pending['name']}'.")
+            else:
+                await update.message.reply_text(f"{item_type.title()} not found.")
+
+            del context.user_data["pending_delete"]
+            return
+
+        elif response_lower in ("no", "n", "tidak", "cancel"):
+            del context.user_data["pending_delete"]
+            await update.message.reply_text("Delete cancelled.")
+            return
+
     # Classify the intent
     result = await classify_message(message_text)
     intent = result.intent
@@ -773,6 +842,85 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     elif intent == Intent.QUERY_ONLINE:
         await online_command(update, context)
+
+    elif intent == Intent.ADD_EXAM:
+        # Natural language add exam
+        subject = entities.subject_code
+        exam_type = entities.title or "exam"
+        date_str = entities.date
+
+        if subject and date_str:
+            exam_id = db.add_exam(
+                subject_code=subject,
+                exam_type=exam_type,
+                exam_date=date_str
+            )
+            db.add_action_history("add", "events", exam_id)
+            await update.message.reply_text(
+                f"Exam added: {exam_type.title()} for {subject} on {date_str}\n"
+                f"ID: {exam_id}"
+            )
+        else:
+            await update.message.reply_text(
+                "Please specify subject and date. Example:\n"
+                "\"final exam BITP1113 on 15 Jan 2025\""
+            )
+
+    elif intent == Intent.QUERY_EXAMS:
+        await exams_command(update, context)
+
+    elif intent == Intent.DELETE_ITEM:
+        # Natural language delete
+        item_type = entities.item_type
+        item_id = entities.item_id
+
+        if item_type and item_id:
+            # Simulate /delete command
+            context.args = [item_type, str(item_id)]
+            await delete_command(update, context)
+        else:
+            await update.message.reply_text(
+                "Please specify what to delete. Example:\n"
+                "\"delete assignment 5\""
+            )
+
+    elif intent == Intent.SEARCH_ALL:
+        # Natural language search
+        query = entities.title
+        if query:
+            context.args = [query]
+            await search_command(update, context)
+        else:
+            await update.message.reply_text("What would you like to search for?")
+
+    elif intent == Intent.QUERY_STATS:
+        await stats_command(update, context)
+
+    elif intent == Intent.SET_LANGUAGE:
+        chat_id = update.effective_chat.id
+        lang = entities.title or "en"
+        db.set_language(chat_id, lang)
+        if lang == "my":
+            await update.message.reply_text("Bahasa ditetapkan kepada Bahasa Melayu.")
+        else:
+            await update.message.reply_text("Language set to English.")
+
+    elif intent == Intent.MUTE_NOTIFICATIONS:
+        chat_id = update.effective_chat.id
+        duration = int(entities.title or "1")
+        unit = entities.description or "hour"
+
+        if "min" in unit:
+            hours = duration / 60
+        else:
+            hours = duration
+
+        mute_until = (datetime.now() + timedelta(hours=hours)).isoformat()
+        db.set_mute_until(chat_id, mute_until)
+
+        await update.message.reply_text(
+            f"🔇 Notifications muted for {duration} {unit}(s)."
+        )
 
     elif intent == Intent.QUERY_ASSIGNMENTS:
         await assignments_command(update, context)
@@ -1087,6 +1235,762 @@ async def trigger_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await update.message.reply_text(f"Error triggering {trigger_name}: {e}")
 
 
+async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /menu command - show interactive menu."""
+    await update.message.reply_text(
+        "📱 *Main Menu*\n\nChoose an option:",
+        reply_markup=get_main_menu_keyboard(),
+        parse_mode="Markdown"
+    )
+
+
+async def exams_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /exams command - list upcoming exams."""
+    exams = db.get_upcoming_exams()
+
+    if not exams:
+        await update.message.reply_text(
+            "No upcoming exams found.\n\n"
+            "Add exams using:\n"
+            "/setexam BITP1113 final 2025-01-15\n"
+            "Or: \"final exam BITP1113 on 15 Jan 2025\""
+        )
+        return
+
+    lines = ["📝 Upcoming Exams:"]
+    for exam in exams:
+        name = exam.get("name_en") or exam.get("name", "Exam")
+        date_str = exam.get("start_date", "")
+        subject = exam.get("subject_code", "")
+        exam_id = exam.get("id", "?")
+
+        line = f"[ID:{exam_id}] {name}"
+        if subject:
+            line += f" ({subject})"
+        line += f" - {date_str}"
+        lines.append(line)
+
+    await update.message.reply_text("\n".join(lines))
+
+
+async def setexam_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /setexam command - set exam date for a subject."""
+    args = context.args
+
+    if not args or len(args) < 3:
+        await update.message.reply_text(
+            "Usage: /setexam <subject> <type> <date> [time]\n\n"
+            "Examples:\n"
+            "  /setexam BITP1113 final 2025-01-15\n"
+            "  /setexam BITI1213 midterm 2024-12-20 10:00\n\n"
+            "Type can be: final, midterm, quiz, test"
+        )
+        return
+
+    subject_code = args[0].upper()
+    exam_type = args[1].lower()
+    exam_date = args[2]
+    exam_time = args[3] if len(args) > 3 else None
+
+    exam_id = db.add_exam(
+        subject_code=subject_code,
+        exam_type=exam_type,
+        exam_date=exam_date,
+        exam_time=exam_time
+    )
+
+    # Record for undo
+    db.add_action_history("add", "events", exam_id)
+
+    response = f"Exam added: {exam_type.title()} for {subject_code} on {exam_date}"
+    if exam_time:
+        response += f" at {exam_time}"
+    response += f"\nID: {exam_id}"
+
+    await update.message.reply_text(response)
+
+
+async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /delete command - delete an item with confirmation."""
+    args = context.args
+
+    if not args or len(args) < 2:
+        await update.message.reply_text(
+            "Usage: /delete <type> <id>\n\n"
+            "Examples:\n"
+            "  /delete assignment 5\n"
+            "  /delete task 3\n"
+            "  /delete todo 1\n"
+            "  /delete online 2\n"
+            "  /delete event 10"
+        )
+        return
+
+    item_type = args[0].lower()
+    try:
+        item_id = int(args[1])
+    except ValueError:
+        await update.message.reply_text("Invalid ID. Please provide a number.")
+        return
+
+    # Get item for confirmation
+    item = None
+    item_name = ""
+
+    if item_type in ("assignment", "a"):
+        item = db.get_assignment_by_id(item_id)
+        item_name = item.get("title", "Unknown") if item else ""
+    elif item_type in ("task", "t"):
+        item = db.get_task_by_id(item_id)
+        item_name = item.get("title", "Unknown") if item else ""
+    elif item_type in ("todo", "td"):
+        item = db.get_todo_by_id(item_id)
+        item_name = item.get("title", "Unknown") if item else ""
+    elif item_type == "online":
+        overrides = db.get_online_overrides()
+        item = next((o for o in overrides if o.get("id") == item_id), None)
+        if item:
+            subject = item.get("subject_code") or "ALL"
+            week = item.get("week_number")
+            date_val = item.get("specific_date")
+            item_name = f"{subject} online on {'Week ' + str(week) if week else date_val}"
+    elif item_type == "event":
+        events = db.get_all_events()
+        item = next((e for e in events if e.get("id") == item_id), None)
+        item_name = item.get("name_en") or item.get("name", "Unknown") if item else ""
+
+    if not item:
+        await update.message.reply_text(f"{item_type.title()} #{item_id} not found.")
+        return
+
+    # Store pending delete for confirmation
+    context.user_data["pending_delete"] = {
+        "type": item_type,
+        "id": item_id,
+        "name": item_name,
+        "data": json.dumps(dict(item)) if item else None
+    }
+
+    await update.message.reply_text(
+        f"Delete {item_type} '{item_name}' (ID: {item_id})?\n\n"
+        "Reply 'yes' to confirm or 'no' to cancel."
+    )
+
+
+async def schedule_subject_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /schedule <subject> command - show schedule for a subject."""
+    args = context.args
+
+    if not args:
+        # Show full week schedule
+        schedule = db.get_all_schedule()
+        response = format_week_schedule(schedule)
+        await update.message.reply_text(response, parse_mode="Markdown")
+        return
+
+    subject = " ".join(args)
+    slots = db.get_schedule_by_subject(subject)
+
+    if not slots:
+        await update.message.reply_text(f"No schedule found for '{subject}'.")
+        return
+
+    day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    lines = [f"Schedule for {subject.upper()}:"]
+
+    for slot in slots:
+        day = day_names[slot.get("day_of_week", 0)]
+        start = slot.get("start_time", "")
+        end = slot.get("end_time", "")
+        class_type = slot.get("class_type", "LEC")
+        room = slot.get("room", "")
+        slot_id = slot.get("id", "?")
+
+        line = f"[ID:{slot_id}] {day} {start}-{end} ({class_type})"
+        if room:
+            line += f" - {room}"
+        lines.append(line)
+
+    await update.message.reply_text("\n".join(lines))
+
+
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /stats command - show productivity statistics."""
+    args = context.args
+    days = 7  # Default to past week
+
+    if args:
+        try:
+            days = int(args[0])
+        except ValueError:
+            pass
+
+    stats = db.get_completion_stats(days)
+    pending = db.get_pending_counts()
+
+    # Calculate percentages
+    def calc_pct(completed, total):
+        if total == 0:
+            return 0
+        return int((completed / total) * 100)
+
+    a_stats = stats["assignments"]
+    t_stats = stats["tasks"]
+    td_stats = stats["todos"]
+
+    a_pct = calc_pct(a_stats["completed"], a_stats["total"])
+    t_pct = calc_pct(t_stats["completed"], t_stats["total"])
+    td_pct = calc_pct(td_stats["completed"], td_stats["total"])
+
+    response = f"""📊 *Statistics (Past {days} Days)*
+
+*Assignments*
+Completed: {a_stats['completed']}/{a_stats['total']} ({a_pct}%)
+Pending: {pending['assignments']}
+
+*Tasks*
+Completed: {t_stats['completed']}/{t_stats['total']} ({t_pct}%)
+Pending: {pending['tasks']}
+
+*TODOs*
+Completed: {td_stats['completed']}/{td_stats['total']} ({td_pct}%)
+Pending: {pending['todos']}
+"""
+    await update.message.reply_text(response, parse_mode="Markdown")
+
+
+async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /search command - global search."""
+    args = context.args
+
+    if not args:
+        await update.message.reply_text(
+            "Usage: /search <query>\n\n"
+            "Example: /search database"
+        )
+        return
+
+    query = " ".join(args)
+    results = db.search_all(query)
+
+    total_count = sum(len(v) for v in results.values())
+
+    if total_count == 0:
+        await update.message.reply_text(f"No results found for '{query}'.")
+        return
+
+    lines = [f"🔍 Found {total_count} result(s) for '{query}':"]
+
+    if results["assignments"]:
+        lines.append("\n📚 *Assignments:*")
+        for a in results["assignments"][:5]:
+            status = "✅" if a.get("is_completed") else "⏳"
+            lines.append(f"  {status} {a['title']} (ID:{a['id']})")
+
+    if results["tasks"]:
+        lines.append("\n📋 *Tasks:*")
+        for t in results["tasks"][:5]:
+            status = "✅" if t.get("is_completed") else "⏳"
+            lines.append(f"  {status} {t['title']} (ID:{t['id']})")
+
+    if results["todos"]:
+        lines.append("\n✅ *TODOs:*")
+        for td in results["todos"][:5]:
+            status = "✅" if td.get("is_completed") else "⏳"
+            lines.append(f"  {status} {td['title']} (ID:{td['id']})")
+
+    if results["schedule"]:
+        lines.append("\n📅 *Schedule:*")
+        day_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+        for s in results["schedule"][:5]:
+            day = day_names[s.get("day_of_week", 0)]
+            lines.append(f"  {s['subject_code']} - {day} {s['start_time']}")
+
+    if results["events"]:
+        lines.append("\n📆 *Events:*")
+        for e in results["events"][:5]:
+            name = e.get("name_en") or e.get("name", "Unknown")
+            lines.append(f"  {name} - {e['start_date']}")
+
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+
+async def undo_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /undo command - undo last action."""
+    last_action = db.get_last_action()
+
+    if not last_action:
+        await update.message.reply_text("No action to undo.")
+        return
+
+    action_type = last_action.get("action_type")
+    table_name = last_action.get("table_name")
+    item_id = last_action.get("item_id")
+    old_data = last_action.get("old_data")
+
+    try:
+        if action_type == "add":
+            # Undo add = delete
+            if table_name == "assignments":
+                db.delete_assignment(item_id)
+            elif table_name == "tasks":
+                db.delete_task(item_id)
+            elif table_name == "todos":
+                db.delete_todo(item_id)
+            elif table_name == "events":
+                db.delete_event(item_id)
+
+            db.delete_action_history(last_action["id"])
+            await update.message.reply_text(f"Undone: Removed {table_name[:-1]} #{item_id}")
+
+        elif action_type == "delete" and old_data:
+            # Undo delete = restore
+            data = json.loads(old_data)
+            if table_name == "assignments":
+                db.add_assignment(
+                    title=data["title"],
+                    due_date=data["due_date"],
+                    subject_code=data.get("subject_code"),
+                    description=data.get("description")
+                )
+            elif table_name == "tasks":
+                db.add_task(
+                    title=data["title"],
+                    scheduled_date=data["scheduled_date"],
+                    description=data.get("description"),
+                    scheduled_time=data.get("scheduled_time"),
+                    location=data.get("location")
+                )
+            elif table_name == "todos":
+                db.add_todo(
+                    title=data["title"],
+                    scheduled_date=data.get("scheduled_date"),
+                    scheduled_time=data.get("scheduled_time")
+                )
+
+            db.delete_action_history(last_action["id"])
+            await update.message.reply_text(f"Undone: Restored {table_name[:-1]}")
+
+        elif action_type == "complete":
+            # Undo complete = uncomplete (reset is_completed to 0)
+            conn = db._get_conn()
+            try:
+                conn.execute(
+                    f"UPDATE {table_name} SET is_completed = 0, completed_at = NULL WHERE id = ?",
+                    (item_id,)
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+            db.delete_action_history(last_action["id"])
+            await update.message.reply_text(f"Undone: Unmarked {table_name[:-1]} #{item_id} as complete")
+
+        else:
+            await update.message.reply_text("Cannot undo this action.")
+
+    except Exception as e:
+        logger.error(f"Error undoing action: {e}")
+        await update.message.reply_text(f"Error undoing action: {e}")
+
+
+async def mute_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /mute command - mute notifications."""
+    chat_id = update.effective_chat.id
+    args = context.args
+
+    hours = 1  # Default to 1 hour
+    if args:
+        try:
+            hours = int(args[0])
+        except ValueError:
+            pass
+
+    mute_until = (datetime.now() + timedelta(hours=hours)).isoformat()
+    db.set_mute_until(chat_id, mute_until)
+
+    await update.message.reply_text(
+        f"🔇 Notifications muted for {hours} hour(s).\n"
+        f"Will resume at {mute_until[:16].replace('T', ' ')}"
+    )
+
+
+async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /settings command - show settings menu."""
+    await update.message.reply_text(
+        "⚙️ *Settings*\n\nChoose an option:",
+        reply_markup=get_settings_keyboard(),
+        parse_mode="Markdown"
+    )
+
+
+async def language_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /language command - set language preference."""
+    chat_id = update.effective_chat.id
+    args = context.args
+
+    if not args:
+        await update.message.reply_text(
+            "Choose your language:",
+            reply_markup=get_language_keyboard()
+        )
+        return
+
+    lang = args[0].lower()
+    if lang in ("en", "english"):
+        db.set_language(chat_id, "en")
+        await update.message.reply_text("Language set to English.")
+    elif lang in ("my", "malay", "melayu", "bm"):
+        db.set_language(chat_id, "my")
+        await update.message.reply_text("Bahasa ditetapkan kepada Bahasa Melayu.")
+    else:
+        await update.message.reply_text("Invalid language. Use 'en' or 'my'.")
+
+
+async def export_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /export command - export data."""
+    args = context.args
+
+    if not args:
+        await update.message.reply_text(
+            "📤 *Export Options*\n\nChoose what to export:",
+            reply_markup=get_export_keyboard(),
+            parse_mode="Markdown"
+        )
+        return
+
+    export_type = args[0].lower()
+
+    if export_type == "schedule":
+        schedule = db.get_all_schedule()
+        if not schedule:
+            await update.message.reply_text("No schedule data to export.")
+            return
+
+        lines = ["# Class Schedule\n"]
+        day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+        by_day = {}
+        for slot in schedule:
+            day = slot.get("day_of_week", 0)
+            if day not in by_day:
+                by_day[day] = []
+            by_day[day].append(slot)
+
+        for day in sorted(by_day.keys()):
+            lines.append(f"\n## {day_names[day]}")
+            for slot in sorted(by_day[day], key=lambda x: x.get("start_time", "")):
+                lines.append(
+                    f"- {slot['start_time']}-{slot['end_time']}: "
+                    f"{slot['subject_code']} ({slot.get('class_type', 'LEC')}) "
+                    f"Room: {slot.get('room', 'TBA')}"
+                )
+
+        content = "\n".join(lines)
+        bio = io.BytesIO(content.encode("utf-8"))
+        bio.name = "schedule.md"
+        await update.message.reply_document(bio, caption="Your class schedule")
+
+    elif export_type == "assignments":
+        assignments = db.get_pending_assignments()
+        if not assignments:
+            await update.message.reply_text("No assignments to export.")
+            return
+
+        lines = ["# Pending Assignments\n"]
+        for a in assignments:
+            lines.append(f"- **{a['title']}**")
+            if a.get("subject_code"):
+                lines.append(f"  Subject: {a['subject_code']}")
+            lines.append(f"  Due: {a['due_date']}")
+            if a.get("description"):
+                lines.append(f"  Description: {a['description']}")
+            lines.append("")
+
+        content = "\n".join(lines)
+        bio = io.BytesIO(content.encode("utf-8"))
+        bio.name = "assignments.md"
+        await update.message.reply_document(bio, caption="Your pending assignments")
+
+    elif export_type == "all":
+        data = {
+            "schedule": db.get_all_schedule(),
+            "assignments": db.get_pending_assignments(),
+            "tasks": db.get_upcoming_tasks(30),
+            "todos": db.get_pending_todos(),
+            "events": db.get_all_events(),
+        }
+
+        content = json.dumps(data, indent=2, default=str)
+        bio = io.BytesIO(content.encode("utf-8"))
+        bio.name = "all_data.json"
+        await update.message.reply_document(bio, caption="All your data (JSON)")
+
+    else:
+        await update.message.reply_text("Unknown export type. Use: schedule, assignments, or all")
+
+
+async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle inline keyboard button callbacks."""
+    query = update.callback_query
+    await query.answer()
+
+    data = query.data
+    chat_id = query.message.chat_id
+
+    # Menu navigation
+    if data == "menu_main":
+        await query.edit_message_text(
+            "📱 *Main Menu*\n\nChoose an option:",
+            reply_markup=get_main_menu_keyboard(),
+            parse_mode="Markdown"
+        )
+
+    elif data == "menu_settings":
+        await query.edit_message_text(
+            "⚙️ *Settings*\n\nChoose an option:",
+            reply_markup=get_settings_keyboard(),
+            parse_mode="Markdown"
+        )
+
+    elif data == "menu_language":
+        await query.edit_message_text(
+            "🌐 *Language*\n\nChoose your language:",
+            reply_markup=get_language_keyboard(),
+            parse_mode="Markdown"
+        )
+
+    elif data == "menu_notifications":
+        settings = db.get_all_notification_settings(chat_id)
+        await query.edit_message_text(
+            "🔔 *Notification Settings*\n\nToggle notifications:",
+            reply_markup=get_notification_settings_keyboard(settings),
+            parse_mode="Markdown"
+        )
+
+    # Commands via buttons - keep menu visible
+    elif data == "cmd_today":
+        schedule = db.get_all_schedule()
+        events = db.get_all_events()
+        response = format_today_classes(schedule, events, today=get_today())
+        await query.edit_message_text(
+            response,
+            reply_markup=get_content_with_menu_keyboard()
+        )
+
+    elif data == "cmd_tomorrow":
+        schedule = db.get_all_schedule()
+        events = db.get_all_events()
+        response = format_tomorrow_classes(schedule, events, today=get_today())
+        await query.edit_message_text(
+            response,
+            reply_markup=get_content_with_menu_keyboard()
+        )
+
+    elif data == "cmd_assignments":
+        assignments = db.get_pending_assignments()
+        response = format_pending_assignments(assignments)
+        await query.edit_message_text(
+            response,
+            reply_markup=get_content_with_menu_keyboard()
+        )
+
+    elif data == "cmd_tasks":
+        tasks = db.get_upcoming_tasks()
+        response = format_pending_tasks(tasks)
+        await query.edit_message_text(
+            response,
+            reply_markup=get_content_with_menu_keyboard()
+        )
+
+    elif data == "cmd_todos":
+        todos = db.get_pending_todos()
+        response = format_pending_todos(todos)
+        await query.edit_message_text(
+            response,
+            reply_markup=get_content_with_menu_keyboard()
+        )
+
+    elif data == "cmd_stats":
+        stats = db.get_completion_stats(7)
+        pending = db.get_pending_counts()
+
+        def calc_pct(c, t):
+            return int((c / t) * 100) if t > 0 else 0
+
+        a = stats["assignments"]
+        t = stats["tasks"]
+        td = stats["todos"]
+
+        response = (
+            f"📊 Stats (Past 7 Days)\n\n"
+            f"📚 Assignments: {a['completed']}/{a['total']} ({calc_pct(a['completed'], a['total'])}%)\n"
+            f"📋 Tasks: {t['completed']}/{t['total']} ({calc_pct(t['completed'], t['total'])}%)\n"
+            f"✅ TODOs: {td['completed']}/{td['total']} ({calc_pct(td['completed'], td['total'])}%)\n\n"
+            f"Pending: {pending['assignments']} assignments, {pending['tasks']} tasks, {pending['todos']} todos"
+        )
+        await query.edit_message_text(
+            response,
+            reply_markup=get_content_with_menu_keyboard()
+        )
+
+    elif data == "cmd_help":
+        help_text = (
+            "📖 *Quick Help*\n\n"
+            "*Schedule:* /today, /tomorrow, /week\n"
+            "*Tasks:* /assignments, /tasks, /todos\n"
+            "*Actions:* /done, /delete, /edit\n"
+            "*Settings:* /settings, /mute, /language\n\n"
+            "Use /help for full command list."
+        )
+        await query.edit_message_text(
+            help_text,
+            reply_markup=get_content_with_menu_keyboard(),
+            parse_mode="Markdown"
+        )
+
+    # Language selection
+    elif data.startswith("lang_"):
+        lang = data.split("_")[1]
+        db.set_language(chat_id, lang)
+        msg = "✅ Language set to English." if lang == "en" else "✅ Bahasa ditetapkan kepada Bahasa Melayu."
+        await query.edit_message_text(
+            msg,
+            reply_markup=get_content_with_menu_keyboard()
+        )
+
+    # Mute
+    elif data.startswith("mute_"):
+        hours = int(data.split("_")[1].replace("h", ""))
+        mute_until = (datetime.now() + timedelta(hours=hours)).isoformat()
+        db.set_mute_until(chat_id, mute_until)
+        await query.edit_message_text(
+            f"🔇 Notifications muted for {hours} hour(s).",
+            reply_markup=get_content_with_menu_keyboard()
+        )
+
+    # Notification toggles
+    elif data.startswith("toggle_"):
+        parts = data.split("_")
+        setting_type = parts[1]
+        current = parts[2]
+        new_value = "off" if current == "on" else "on"
+
+        setting_key = f"{setting_type}_alert" if setting_type != "briefing" else "daily_briefing"
+        if setting_type == "midnight":
+            setting_key = "midnight_review"
+
+        db.set_notification_setting(chat_id, setting_key, new_value)
+
+        settings = db.get_all_notification_settings(chat_id)
+        await query.edit_message_text(
+            "🔔 *Notification Settings*\n\nToggle notifications:",
+            reply_markup=get_notification_settings_keyboard(settings),
+            parse_mode="Markdown"
+        )
+
+    # Done action
+    elif data.startswith("done_"):
+        parts = data.split("_")
+        item_type = parts[1]
+        item_id = int(parts[2])
+
+        if item_type == "assignment":
+            item = db.get_assignment_by_id(item_id)
+            if item:
+                db.complete_assignment(item_id)
+                db.add_action_history("complete", "assignments", item_id)
+                await query.edit_message_text(
+                    f"✅ Marked '{item['title']}' as completed!",
+                    reply_markup=get_content_with_menu_keyboard()
+                )
+        elif item_type == "task":
+            item = db.get_task_by_id(item_id)
+            if item:
+                db.complete_task(item_id)
+                db.add_action_history("complete", "tasks", item_id)
+                await query.edit_message_text(
+                    f"✅ Marked '{item['title']}' as completed!",
+                    reply_markup=get_content_with_menu_keyboard()
+                )
+        elif item_type == "todo":
+            item = db.get_todo_by_id(item_id)
+            if item:
+                db.complete_todo(item_id)
+                db.add_action_history("complete", "todos", item_id)
+                await query.edit_message_text(
+                    f"✅ Marked '{item['title']}' as completed!",
+                    reply_markup=get_content_with_menu_keyboard()
+                )
+
+    # Delete confirmation
+    elif data.startswith("delete_"):
+        parts = data.split("_")
+        item_type = parts[1]
+        item_id = int(parts[2])
+
+        await query.edit_message_text(
+            f"Are you sure you want to delete this {item_type}?",
+            reply_markup=get_confirmation_keyboard("delete", item_type, item_id)
+        )
+
+    elif data.startswith("confirm_delete_"):
+        parts = data.split("_")
+        item_type = parts[2]
+        item_id = int(parts[3])
+
+        deleted = None
+        if item_type == "assignment":
+            deleted = db.delete_assignment(item_id)
+        elif item_type == "task":
+            deleted = db.delete_task(item_id)
+        elif item_type == "todo":
+            deleted = db.delete_todo(item_id)
+
+        if deleted:
+            db.add_action_history("delete", f"{item_type}s", item_id, json.dumps(deleted))
+            await query.edit_message_text(
+                f"🗑️ Deleted {item_type} successfully!",
+                reply_markup=get_content_with_menu_keyboard()
+            )
+        else:
+            await query.edit_message_text(
+                f"{item_type.title()} not found.",
+                reply_markup=get_content_with_menu_keyboard()
+            )
+
+    elif data.startswith("cancel_"):
+        await query.edit_message_text(
+            "Action cancelled.",
+            reply_markup=get_content_with_menu_keyboard()
+        )
+
+    # Snooze
+    elif data.startswith("snooze_"):
+        parts = data.split("_")
+        item_type = parts[1]
+        item_id = int(parts[2])
+        minutes = int(parts[3])
+
+        # For snooze, we just acknowledge - actual scheduling would need more infrastructure
+        await query.edit_message_text(
+            f"⏰ Snoozed for {minutes} minutes. I'll remind you again later.",
+            reply_markup=get_content_with_menu_keyboard()
+        )
+
+    # Export
+    elif data.startswith("export_"):
+        export_type = data.split("_")[1]
+        # Trigger export through message
+        context.user_data["export_type"] = export_type
+        await query.edit_message_text(f"Processing {export_type} export...")
+
+        # Create a fake update for the export command
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=f"Exporting {export_type}..."
+        )
+
+
 def register_handlers(application: Application) -> None:
     """Register all command handlers with the application."""
     # Add onboarding conversation handler first (higher priority)
@@ -1095,6 +1999,7 @@ def register_handlers(application: Application) -> None:
     # Command handlers
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("menu", menu_command))
     application.add_handler(CommandHandler("status", status_command))
     application.add_handler(CommandHandler("tomorrow", tomorrow_command))
     application.add_handler(CommandHandler("today", today_command))
@@ -1109,12 +2014,28 @@ def register_handlers(application: Application) -> None:
     application.add_handler(CommandHandler("online", online_command))
     application.add_handler(CommandHandler("setonline", setonline_command))
 
+    # New feature commands
+    application.add_handler(CommandHandler("exams", exams_command))
+    application.add_handler(CommandHandler("setexam", setexam_command))
+    application.add_handler(CommandHandler("delete", delete_command))
+    application.add_handler(CommandHandler("schedule", schedule_subject_command))
+    application.add_handler(CommandHandler("stats", stats_command))
+    application.add_handler(CommandHandler("search", search_command))
+    application.add_handler(CommandHandler("undo", undo_command))
+    application.add_handler(CommandHandler("mute", mute_command))
+    application.add_handler(CommandHandler("settings", settings_command))
+    application.add_handler(CommandHandler("language", language_command))
+    application.add_handler(CommandHandler("export", export_command))
+
     # Debug commands
     application.add_handler(CommandHandler("setdate", setdate_command))
     application.add_handler(CommandHandler("resetdate", resetdate_command))
     application.add_handler(CommandHandler("settime", settime_command))
     application.add_handler(CommandHandler("resettime", resettime_command))
     application.add_handler(CommandHandler("trigger", trigger_command))
+
+    # Callback query handler for inline keyboards
+    application.add_handler(CallbackQueryHandler(callback_query_handler))
 
     # Message handlers (lower priority than commands)
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo_message))

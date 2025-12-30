@@ -151,10 +151,18 @@ class NotificationScheduler:
         finally:
             conn.close()
 
-    async def _send_notification(self, chat_id: int, message: str) -> bool:
+    async def _send_notification(self, chat_id: int, message: str, keyboard=None) -> bool:
         """Send a notification to a specific user."""
+        # Check if user is muted
+        if db.is_muted(chat_id):
+            logger.info(f"Skipping notification to {chat_id} - user is muted")
+            return False
+
         try:
-            await self.bot.send_message(chat_id=chat_id, text=message)
+            if keyboard:
+                await self.bot.send_message(chat_id=chat_id, text=message, reply_markup=keyboard)
+            else:
+                await self.bot.send_message(chat_id=chat_id, text=message)
             logger.info(f"Sent notification to {chat_id}")
             return True
         except TelegramError as e:

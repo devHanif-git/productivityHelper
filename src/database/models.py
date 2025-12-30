@@ -14,6 +14,8 @@ CREATE TABLE IF NOT EXISTS user_config (
     offday_alert_time TEXT DEFAULT '20:00',
     midnight_todo_review INTEGER DEFAULT 1,
     timezone TEXT DEFAULT 'Asia/Kuala_Lumpur',
+    language TEXT DEFAULT 'en',
+    muted_until TEXT,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -26,7 +28,29 @@ CREATE TABLE IF NOT EXISTS events (
     start_date TEXT NOT NULL,
     end_date TEXT,
     affects_classes INTEGER DEFAULT 1,
+    subject_code TEXT,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Action history for undo functionality
+CREATE TABLE IF NOT EXISTS action_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    action_type TEXT NOT NULL,
+    table_name TEXT NOT NULL,
+    item_id INTEGER NOT NULL,
+    old_data TEXT,
+    new_data TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Notification settings
+CREATE TABLE IF NOT EXISTS notification_settings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id INTEGER NOT NULL,
+    setting_key TEXT NOT NULL,
+    setting_value TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(chat_id, setting_key)
 );
 
 -- Weekly timetable slots
@@ -68,6 +92,9 @@ CREATE TABLE IF NOT EXISTS tasks (
     completed_at TEXT,
     reminded_1day INTEGER DEFAULT 0,
     reminded_2hours INTEGER DEFAULT 0,
+    recurrence TEXT,
+    recurrence_end TEXT,
+    parent_task_id INTEGER,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 

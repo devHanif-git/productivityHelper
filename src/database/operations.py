@@ -1,7 +1,8 @@
 """Database CRUD operations for all tables."""
 
+import json
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 from .models import get_connection
 
@@ -799,5 +800,598 @@ class DatabaseOperations:
             )
             conn.commit()
             return True
+        finally:
+            conn.close()
+
+    # ==================== Exam Events ====================
+
+    def add_exam(
+        self,
+        subject_code: str,
+        exam_type: str,
+        exam_date: str,
+        exam_time: str = None,
+        name: str = None
+    ) -> int:
+        """Add an exam event for a subject. Returns the new ID."""
+        event_type = "exam"
+        name = name or f"{exam_type.title()} Exam - {subject_code}"
+        name_en = name
+
+        conn = self._get_conn()
+        try:
+            # Store time in name_en if provided
+            if exam_time:
+                name_en = f"{name} at {exam_time}"
+
+            cursor = conn.execute(
+                """INSERT INTO events
+                   (event_type, name, name_en, start_date, subject_code, affects_classes)
+                   VALUES (?, ?, ?, ?, ?, 0)""",
+                (event_type, name, name_en, exam_date, subject_code)
+            )
+            conn.commit()
+            return cursor.lastrowid
+        finally:
+            conn.close()
+
+    def get_upcoming_exams(self, from_date: str = None) -> list[dict]:
+        """Get all upcoming exams."""
+        conn = self._get_conn()
+        try:
+            if from_date is None:
+                from_date = datetime.now().date().isoformat()
+
+            cursor = conn.execute(
+                """SELECT * FROM events
+                   WHERE event_type = 'exam'
+                   AND start_date >= ?
+                   ORDER BY start_date""",
+                (from_date,)
+            )
+            return [dict(row) for row in cursor.fetchall()]
+        finally:
+            conn.close()
+
+    def get_exams_for_subject(self, subject_code: str) -> list[dict]:
+        """Get all exams for a specific subject."""
+        conn = self._get_conn()
+        try:
+            cursor = conn.execute(
+                """SELECT * FROM events
+                   WHERE event_type = 'exam'
+                   AND subject_code = ?
+                   ORDER BY start_date""",
+                (subject_code,)
+            )
+            return [dict(row) for row in cursor.fetchall()]
+        finally:
+            conn.close()
+
+    # ==================== Delete Operations ====================
+
+    def delete_assignment(self, assignment_id: int) -> Optional[dict]:
+        """Delete an assignment. Returns the deleted item or None."""
+        conn = self._get_conn()
+        try:
+            # Get the item first for undo support
+            cursor = conn.execute(
+                "SELECT * FROM assignments WHERE id = ?",
+                (assignment_id,)
+            )
+            item = cursor.fetchone()
+            if not item:
+                return None
+
+            item_dict = dict(item)
+            conn.execute(
+                "DELETE FROM assignments WHERE id = ?",
+                (assignment_id,)
+            )
+            conn.commit()
+            return item_dict
+        finally:
+            conn.close()
+
+    def delete_task(self, task_id: int) -> Optional[dict]:
+        """Delete a task. Returns the deleted item or None."""
+        conn = self._get_conn()
+        try:
+            cursor = conn.execute(
+                "SELECT * FROM tasks WHERE id = ?",
+                (task_id,)
+            )
+            item = cursor.fetchone()
+            if not item:
+                return None
+
+            item_dict = dict(item)
+            conn.execute(
+                "DELETE FROM tasks WHERE id = ?",
+                (task_id,)
+            )
+            conn.commit()
+            return item_dict
+        finally:
+            conn.close()
+
+    def delete_todo(self, todo_id: int) -> Optional[dict]:
+        """Delete a TODO. Returns the deleted item or None."""
+        conn = self._get_conn()
+        try:
+            cursor = conn.execute(
+                "SELECT * FROM todos WHERE id = ?",
+                (todo_id,)
+            )
+            item = cursor.fetchone()
+            if not item:
+                return None
+
+            item_dict = dict(item)
+            conn.execute(
+                "DELETE FROM todos WHERE id = ?",
+                (todo_id,)
+            )
+            conn.commit()
+            return item_dict
+        finally:
+            conn.close()
+
+    def delete_event(self, event_id: int) -> Optional[dict]:
+        """Delete an event. Returns the deleted item or None."""
+        conn = self._get_conn()
+        try:
+            cursor = conn.execute(
+                "SELECT * FROM events WHERE id = ?",
+                (event_id,)
+            )
+            item = cursor.fetchone()
+            if not item:
+                return None
+
+            item_dict = dict(item)
+            conn.execute(
+                "DELETE FROM events WHERE id = ?",
+                (event_id,)
+            )
+            conn.commit()
+            return item_dict
+        finally:
+            conn.close()
+
+    # ==================== Action History (Undo) ====================
+
+    def add_action_history(
+        self,
+        action_type: str,
+        table_name: str,
+        item_id: int,
+        old_data: str = None,
+        new_data: str = None
+    ) -> int:
+        """Record an action for undo functionality."""
+        conn = self._get_conn()
+        try:
+            cursor = conn.execute(
+                """INSERT INTO action_history
+                   (action_type, table_name, item_id, old_data, new_data)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (action_type, table_name, item_id, old_data, new_data)
+            )
+            conn.commit()
+            return cursor.lastrowid
+        finally:
+            conn.close()
+
+    def get_last_action(self, chat_id: int = None) -> Optional[dict]:
+        """Get the most recent action for undo."""
+        conn = self._get_conn()
+        try:
+            cursor = conn.execute(
+                """SELECT * FROM action_history
+                   ORDER BY id DESC
+                   LIMIT 1"""
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
+    def delete_action_history(self, action_id: int) -> bool:
+        """Delete an action from history after undo."""
+        conn = self._get_conn()
+        try:
+            conn.execute(
+                "DELETE FROM action_history WHERE id = ?",
+                (action_id,)
+            )
+            conn.commit()
+            return True
+        finally:
+            conn.close()
+
+    # ==================== Notification Settings ====================
+
+    def set_notification_setting(
+        self,
+        chat_id: int,
+        setting_key: str,
+        setting_value: str
+    ) -> bool:
+        """Set a notification setting for a user."""
+        conn = self._get_conn()
+        try:
+            conn.execute(
+                """INSERT OR REPLACE INTO notification_settings
+                   (chat_id, setting_key, setting_value)
+                   VALUES (?, ?, ?)""",
+                (chat_id, setting_key, setting_value)
+            )
+            conn.commit()
+            return True
+        finally:
+            conn.close()
+
+    def get_notification_setting(
+        self,
+        chat_id: int,
+        setting_key: str
+    ) -> Optional[str]:
+        """Get a notification setting for a user."""
+        conn = self._get_conn()
+        try:
+            cursor = conn.execute(
+                """SELECT setting_value FROM notification_settings
+                   WHERE chat_id = ? AND setting_key = ?""",
+                (chat_id, setting_key)
+            )
+            row = cursor.fetchone()
+            return row[0] if row else None
+        finally:
+            conn.close()
+
+    def get_all_notification_settings(self, chat_id: int) -> dict:
+        """Get all notification settings for a user."""
+        conn = self._get_conn()
+        try:
+            cursor = conn.execute(
+                """SELECT setting_key, setting_value FROM notification_settings
+                   WHERE chat_id = ?""",
+                (chat_id,)
+            )
+            return {row[0]: row[1] for row in cursor.fetchall()}
+        finally:
+            conn.close()
+
+    def set_mute_until(self, chat_id: int, muted_until: str) -> bool:
+        """Set mute until datetime for a user."""
+        return self.update_user_config(chat_id, muted_until=muted_until)
+
+    def is_muted(self, chat_id: int) -> bool:
+        """Check if notifications are muted for a user."""
+        user_config = self.get_user_config(chat_id)
+        if not user_config:
+            return False
+
+        muted_until = user_config.get("muted_until")
+        if not muted_until:
+            return False
+
+        try:
+            mute_end = datetime.fromisoformat(muted_until)
+            return datetime.now() < mute_end
+        except ValueError:
+            return False
+
+    # ==================== Statistics ====================
+
+    def get_completion_stats(self, days: int = 7) -> dict:
+        """Get completion statistics for the past N days."""
+        conn = self._get_conn()
+        try:
+            cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+
+            stats = {}
+
+            # Assignments stats
+            cursor = conn.execute(
+                """SELECT COUNT(*) FROM assignments
+                   WHERE is_completed = 1
+                   AND completed_at >= ?""",
+                (cutoff,)
+            )
+            completed_assignments = cursor.fetchone()[0]
+
+            cursor = conn.execute(
+                """SELECT COUNT(*) FROM assignments
+                   WHERE created_at >= ?""",
+                (cutoff,)
+            )
+            total_assignments = cursor.fetchone()[0]
+
+            stats["assignments"] = {
+                "completed": completed_assignments,
+                "total": total_assignments
+            }
+
+            # Tasks stats
+            cursor = conn.execute(
+                """SELECT COUNT(*) FROM tasks
+                   WHERE is_completed = 1
+                   AND completed_at >= ?""",
+                (cutoff,)
+            )
+            completed_tasks = cursor.fetchone()[0]
+
+            cursor = conn.execute(
+                """SELECT COUNT(*) FROM tasks
+                   WHERE created_at >= ?""",
+                (cutoff,)
+            )
+            total_tasks = cursor.fetchone()[0]
+
+            stats["tasks"] = {
+                "completed": completed_tasks,
+                "total": total_tasks
+            }
+
+            # TODOs stats
+            cursor = conn.execute(
+                """SELECT COUNT(*) FROM todos
+                   WHERE is_completed = 1
+                   AND completed_at >= ?""",
+                (cutoff,)
+            )
+            completed_todos = cursor.fetchone()[0]
+
+            cursor = conn.execute(
+                """SELECT COUNT(*) FROM todos
+                   WHERE created_at >= ?""",
+                (cutoff,)
+            )
+            total_todos = cursor.fetchone()[0]
+
+            stats["todos"] = {
+                "completed": completed_todos,
+                "total": total_todos
+            }
+
+            return stats
+        finally:
+            conn.close()
+
+    # ==================== Global Search ====================
+
+    def search_all(self, query: str) -> dict:
+        """Search across all tables for a query string."""
+        conn = self._get_conn()
+        try:
+            results = {
+                "assignments": [],
+                "tasks": [],
+                "todos": [],
+                "schedule": [],
+                "events": []
+            }
+
+            search_pattern = f"%{query}%"
+
+            # Search assignments
+            cursor = conn.execute(
+                """SELECT * FROM assignments
+                   WHERE title LIKE ? OR description LIKE ? OR subject_code LIKE ?
+                   ORDER BY due_date""",
+                (search_pattern, search_pattern, search_pattern)
+            )
+            results["assignments"] = [dict(row) for row in cursor.fetchall()]
+
+            # Search tasks
+            cursor = conn.execute(
+                """SELECT * FROM tasks
+                   WHERE title LIKE ? OR description LIKE ? OR location LIKE ?
+                   ORDER BY scheduled_date""",
+                (search_pattern, search_pattern, search_pattern)
+            )
+            results["tasks"] = [dict(row) for row in cursor.fetchall()]
+
+            # Search todos
+            cursor = conn.execute(
+                """SELECT * FROM todos
+                   WHERE title LIKE ?
+                   ORDER BY created_at""",
+                (search_pattern,)
+            )
+            results["todos"] = [dict(row) for row in cursor.fetchall()]
+
+            # Search schedule
+            cursor = conn.execute(
+                """SELECT * FROM schedule
+                   WHERE subject_code LIKE ? OR subject_name LIKE ? OR room LIKE ?
+                   ORDER BY day_of_week, start_time""",
+                (search_pattern, search_pattern, search_pattern)
+            )
+            results["schedule"] = [dict(row) for row in cursor.fetchall()]
+
+            # Search events
+            cursor = conn.execute(
+                """SELECT * FROM events
+                   WHERE name LIKE ? OR name_en LIKE ?
+                   ORDER BY start_date""",
+                (search_pattern, search_pattern)
+            )
+            results["events"] = [dict(row) for row in cursor.fetchall()]
+
+            return results
+        finally:
+            conn.close()
+
+    # ==================== Recurring Tasks ====================
+
+    def add_recurring_task(
+        self,
+        title: str,
+        scheduled_date: str,
+        recurrence: str,
+        description: str = None,
+        scheduled_time: str = None,
+        location: str = None,
+        recurrence_end: str = None
+    ) -> int:
+        """Add a recurring task. Returns the new ID."""
+        conn = self._get_conn()
+        try:
+            cursor = conn.execute(
+                """INSERT INTO tasks
+                   (title, description, scheduled_date, scheduled_time, location,
+                    recurrence, recurrence_end)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (title, description, scheduled_date, scheduled_time, location,
+                 recurrence, recurrence_end)
+            )
+            conn.commit()
+            return cursor.lastrowid
+        finally:
+            conn.close()
+
+    def get_recurring_tasks(self) -> list[dict]:
+        """Get all recurring tasks (master records)."""
+        conn = self._get_conn()
+        try:
+            cursor = conn.execute(
+                """SELECT * FROM tasks
+                   WHERE recurrence IS NOT NULL
+                   AND parent_task_id IS NULL
+                   ORDER BY scheduled_date"""
+            )
+            return [dict(row) for row in cursor.fetchall()]
+        finally:
+            conn.close()
+
+    def create_recurring_instance(
+        self,
+        parent_task_id: int,
+        scheduled_date: str
+    ) -> int:
+        """Create an instance of a recurring task for a specific date."""
+        conn = self._get_conn()
+        try:
+            # Get parent task
+            cursor = conn.execute(
+                "SELECT * FROM tasks WHERE id = ?",
+                (parent_task_id,)
+            )
+            parent = cursor.fetchone()
+            if not parent:
+                return -1
+
+            parent_dict = dict(parent)
+
+            cursor = conn.execute(
+                """INSERT INTO tasks
+                   (title, description, scheduled_date, scheduled_time, location,
+                    parent_task_id)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (parent_dict["title"], parent_dict.get("description"),
+                 scheduled_date, parent_dict.get("scheduled_time"),
+                 parent_dict.get("location"), parent_task_id)
+            )
+            conn.commit()
+            return cursor.lastrowid
+        finally:
+            conn.close()
+
+    # ==================== Language Settings ====================
+
+    def set_language(self, chat_id: int, language: str) -> bool:
+        """Set user language preference."""
+        return self.update_user_config(chat_id, language=language)
+
+    def get_language(self, chat_id: int) -> str:
+        """Get user language preference. Defaults to 'en'."""
+        user_config = self.get_user_config(chat_id)
+        if not user_config:
+            return "en"
+        return user_config.get("language", "en")
+
+    # ==================== Pending Counts ====================
+
+    def get_pending_counts(self) -> dict:
+        """Get counts of pending items."""
+        conn = self._get_conn()
+        try:
+            counts = {}
+
+            cursor = conn.execute(
+                "SELECT COUNT(*) FROM assignments WHERE is_completed = 0"
+            )
+            counts["assignments"] = cursor.fetchone()[0]
+
+            cursor = conn.execute(
+                "SELECT COUNT(*) FROM tasks WHERE is_completed = 0"
+            )
+            counts["tasks"] = cursor.fetchone()[0]
+
+            cursor = conn.execute(
+                "SELECT COUNT(*) FROM todos WHERE is_completed = 0"
+            )
+            counts["todos"] = cursor.fetchone()[0]
+
+            return counts
+        finally:
+            conn.close()
+
+    # ==================== Get Item By ID ====================
+
+    def get_assignment_by_id(self, assignment_id: int) -> Optional[dict]:
+        """Get a specific assignment by ID."""
+        conn = self._get_conn()
+        try:
+            cursor = conn.execute(
+                "SELECT * FROM assignments WHERE id = ?",
+                (assignment_id,)
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
+    def get_task_by_id(self, task_id: int) -> Optional[dict]:
+        """Get a specific task by ID."""
+        conn = self._get_conn()
+        try:
+            cursor = conn.execute(
+                "SELECT * FROM tasks WHERE id = ?",
+                (task_id,)
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
+    def get_todo_by_id(self, todo_id: int) -> Optional[dict]:
+        """Get a specific TODO by ID."""
+        conn = self._get_conn()
+        try:
+            cursor = conn.execute(
+                "SELECT * FROM todos WHERE id = ?",
+                (todo_id,)
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
+    def get_schedule_by_subject(self, subject: str) -> list[dict]:
+        """Get schedule slots for a subject by code or name."""
+        conn = self._get_conn()
+        try:
+            search_pattern = f"%{subject}%"
+            cursor = conn.execute(
+                """SELECT * FROM schedule
+                   WHERE subject_code LIKE ? OR subject_name LIKE ?
+                   ORDER BY day_of_week, start_time""",
+                (search_pattern, search_pattern)
+            )
+            return [dict(row) for row in cursor.fetchall()]
         finally:
             conn.close()

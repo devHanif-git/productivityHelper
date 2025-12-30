@@ -54,6 +54,23 @@ class Intent(Enum):
     SET_ONLINE = "set_online"
     QUERY_ONLINE = "query_online"
 
+    # Exams
+    ADD_EXAM = "add_exam"
+    QUERY_EXAMS = "query_exams"
+
+    # Delete
+    DELETE_ITEM = "delete_item"
+
+    # Search
+    SEARCH_ALL = "search_all"
+
+    # Stats
+    QUERY_STATS = "query_stats"
+
+    # Settings
+    SET_LANGUAGE = "set_language"
+    MUTE_NOTIFICATIONS = "mute_notifications"
+
     # Image Upload
     UPLOAD_ASSIGNMENT_IMAGE = "upload_assignment"
 
@@ -383,6 +400,83 @@ async def classify_message(message: str) -> ClassificationResult:
         return ClassificationResult(
             intent=Intent.QUERY_ONLINE,
             entities=ParsedEntities(),
+            confidence=0.90
+        )
+
+    # Set exam patterns (e.g., "final exam BITP1113 on 15 Jan 2025")
+    set_exam_match = re.search(
+        r"(final|midterm|mid-term|ujian|peperiksaan)\s*(exam|examination|test)?\s+(\w+)\s+(on|at|pada)\s+(.+)",
+        message_lower
+    )
+    if set_exam_match:
+        exam_type = set_exam_match.group(1)
+        subject = set_exam_match.group(3).upper()
+        date_part = set_exam_match.group(5).strip()
+        return ClassificationResult(
+            intent=Intent.ADD_EXAM,
+            entities=ParsedEntities(subject_code=subject, date=date_part, title=exam_type),
+            confidence=0.90
+        )
+
+    # Query exams patterns
+    if re.search(r"(what|show|list|when).*(exam|exams|peperiksaan|ujian)", message_lower):
+        return ClassificationResult(
+            intent=Intent.QUERY_EXAMS,
+            entities=ParsedEntities(),
+            confidence=0.90
+        )
+
+    # Delete patterns (e.g., "delete assignment 5", "remove todo 3")
+    delete_match = re.search(
+        r"(delete|remove|hapus|buang)\s+(assignment|task|todo|online|event)\s+(\d+)",
+        message_lower
+    )
+    if delete_match:
+        item_type = delete_match.group(2)
+        item_id = int(delete_match.group(3))
+        return ClassificationResult(
+            intent=Intent.DELETE_ITEM,
+            entities=ParsedEntities(item_type=item_type, item_id=item_id),
+            confidence=0.95
+        )
+
+    # Search patterns
+    search_match = re.search(r"(search|find|cari)\s+(.+)", message_lower)
+    if search_match:
+        query = search_match.group(2).strip()
+        return ClassificationResult(
+            intent=Intent.SEARCH_ALL,
+            entities=ParsedEntities(title=query),
+            confidence=0.90
+        )
+
+    # Stats patterns
+    if re.search(r"(show|my|get).*(stats|statistics|statistik|progress|productivity)", message_lower):
+        return ClassificationResult(
+            intent=Intent.QUERY_STATS,
+            entities=ParsedEntities(),
+            confidence=0.90
+        )
+
+    # Language patterns
+    lang_match = re.search(r"(set|change|tukar)\s+(language|bahasa)\s+(to\s+)?(en|english|my|malay|melayu)", message_lower)
+    if lang_match:
+        lang = lang_match.group(4)
+        lang_code = "my" if lang in ("my", "malay", "melayu") else "en"
+        return ClassificationResult(
+            intent=Intent.SET_LANGUAGE,
+            entities=ParsedEntities(title=lang_code),
+            confidence=0.95
+        )
+
+    # Mute patterns
+    mute_match = re.search(r"(mute|senyap|silence)\s*(?:for\s+)?(\d+)?\s*(hour|hours|jam|minute|minutes|minit)?", message_lower)
+    if mute_match:
+        duration = mute_match.group(2) or "1"
+        unit = mute_match.group(3) or "hour"
+        return ClassificationResult(
+            intent=Intent.MUTE_NOTIFICATIONS,
+            entities=ParsedEntities(title=duration, description=unit),
             confidence=0.90
         )
 
