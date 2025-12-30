@@ -1395,3 +1395,165 @@ class DatabaseOperations:
             return [dict(row) for row in cursor.fetchall()]
         finally:
             conn.close()
+
+    # ==================== Voice Notes ====================
+
+    def add_voice_note(
+        self,
+        chat_id: int,
+        original_transcript: str,
+        processed_content: str,
+        processing_type: str,
+        duration_seconds: int = None,
+        title: str = None,
+        tags: str = None
+    ) -> int:
+        """Add a voice note. Returns the new ID."""
+        conn = self._get_conn()
+        try:
+            cursor = conn.execute(
+                """INSERT INTO voice_notes
+                   (chat_id, original_transcript, processed_content, processing_type,
+                    duration_seconds, title, tags)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (chat_id, original_transcript, processed_content, processing_type,
+                 duration_seconds, title, tags)
+            )
+            conn.commit()
+            return cursor.lastrowid
+        finally:
+            conn.close()
+
+    def get_voice_notes(self, chat_id: int, limit: int = 20) -> list[dict]:
+        """Get voice notes for a user."""
+        conn = self._get_conn()
+        try:
+            cursor = conn.execute(
+                """SELECT * FROM voice_notes
+                   WHERE chat_id = ?
+                   ORDER BY created_at DESC
+                   LIMIT ?""",
+                (chat_id, limit)
+            )
+            return [dict(row) for row in cursor.fetchall()]
+        finally:
+            conn.close()
+
+    def get_voice_note_by_id(self, note_id: int) -> Optional[dict]:
+        """Get a specific voice note by ID."""
+        conn = self._get_conn()
+        try:
+            cursor = conn.execute(
+                "SELECT * FROM voice_notes WHERE id = ?",
+                (note_id,)
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
+    def search_voice_notes(self, chat_id: int, query: str) -> list[dict]:
+        """Search voice notes by content or title."""
+        conn = self._get_conn()
+        try:
+            search_pattern = f"%{query}%"
+            cursor = conn.execute(
+                """SELECT * FROM voice_notes
+                   WHERE chat_id = ?
+                   AND (title LIKE ? OR original_transcript LIKE ? OR processed_content LIKE ? OR tags LIKE ?)
+                   ORDER BY created_at DESC""",
+                (chat_id, search_pattern, search_pattern, search_pattern, search_pattern)
+            )
+            return [dict(row) for row in cursor.fetchall()]
+        finally:
+            conn.close()
+
+    def delete_voice_note(self, note_id: int) -> Optional[dict]:
+        """Delete a voice note. Returns the deleted item or None."""
+        conn = self._get_conn()
+        try:
+            cursor = conn.execute(
+                "SELECT * FROM voice_notes WHERE id = ?",
+                (note_id,)
+            )
+            item = cursor.fetchone()
+            if not item:
+                return None
+
+            item_dict = dict(item)
+            conn.execute(
+                "DELETE FROM voice_notes WHERE id = ?",
+                (note_id,)
+            )
+            conn.commit()
+            return item_dict
+        finally:
+            conn.close()
+
+    def update_voice_note_title(self, note_id: int, title: str) -> bool:
+        """Update a voice note's title."""
+        conn = self._get_conn()
+        try:
+            conn.execute(
+                "UPDATE voice_notes SET title = ? WHERE id = ?",
+                (title, note_id)
+            )
+            conn.commit()
+            return True
+        finally:
+            conn.close()
+
+    # ==================== AI Suggestions Data ====================
+
+    def get_data_for_suggestions(self) -> dict:
+        """Get all relevant data for AI suggestions."""
+        conn = self._get_conn()
+        try:
+            data = {}
+
+            # Pending assignments with due dates
+            cursor = conn.execute(
+                """SELECT * FROM assignments
+                   WHERE is_completed = 0
+                   ORDER BY due_date"""
+            )
+            data["assignments"] = [dict(row) for row in cursor.fetchall()]
+
+            # Upcoming tasks
+            today = datetime.now().date().isoformat()
+            cursor = conn.execute(
+                """SELECT * FROM tasks
+                   WHERE is_completed = 0
+                   AND scheduled_date >= ?
+                   ORDER BY scheduled_date, scheduled_time""",
+                (today,)
+            )
+            data["tasks"] = [dict(row) for row in cursor.fetchall()]
+
+            # Pending todos
+            cursor = conn.execute(
+                """SELECT * FROM todos
+                   WHERE is_completed = 0
+                   ORDER BY scheduled_date, created_at"""
+            )
+            data["todos"] = [dict(row) for row in cursor.fetchall()]
+
+            # Weekly schedule
+            cursor = conn.execute(
+                "SELECT * FROM schedule ORDER BY day_of_week, start_time"
+            )
+            data["schedule"] = [dict(row) for row in cursor.fetchall()]
+
+            # Upcoming exams
+            cursor = conn.execute(
+                """SELECT * FROM events
+                   WHERE event_type = 'exam'
+                   AND start_date >= ?
+                   ORDER BY start_date""",
+                (today,)
+            )
+            data["exams"] = [dict(row) for row in cursor.fetchall()]
+
+            return data
+        finally:
+            conn.close()

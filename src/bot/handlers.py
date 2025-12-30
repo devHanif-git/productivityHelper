@@ -21,6 +21,9 @@ from .keyboards import (
     get_export_keyboard,
     get_back_to_menu_keyboard,
     get_content_with_menu_keyboard,
+    get_voice_processing_keyboard,
+    get_notes_list_keyboard,
+    get_note_actions_keyboard,
 )
 
 # Malaysia timezone
@@ -179,6 +182,15 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 /online - Show online class settings
 /setonline <subject|all> <week#|date> - Set class online
 
+*Voice Notes*
+Send voice message - Transcribe & process audio
+/notes - List saved voice notes
+/notes <id> - View specific note
+/notes search <query> - Search notes
+
+*AI Features*
+/suggest - Get AI-powered suggestions
+
 *Settings*
 /settings - Open settings menu
 /mute <hours> - Mute notifications
@@ -192,13 +204,12 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 /resettime - Reset to real time
 /trigger <type> - Trigger notification manually
 
-You can also send me natural language messages like:
-• "I have assignment report for BITP1113 due Friday 5pm"
+You can also send me:
+• Voice messages (up to 30 min) for transcription
+• "I have assignment report for BITP1113 due Friday"
 • "What class tomorrow?"
-• "Done with BITP report"
-• "Delete assignment 5"
+• "Give me suggestions"
 • "Search database"
-• "Mute for 2 hours"
 """
     await update.message.reply_text(help_text.strip(), parse_mode="Markdown")
 
@@ -1087,6 +1098,197 @@ async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYP
             "- Assignment sheets\n\n"
             "Please try with a clearer image."
         )
+
+
+async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle incoming voice messages - transcribe and offer processing options."""
+    from ..ai.gemini_client import get_gemini_client
+
+    voice = update.message.voice
+    chat_id = update.effective_chat.id
+
+    # Check duration (max 30 minutes = 1800 seconds)
+    duration = voice.duration
+    if duration > 1800:
+        await update.message.reply_text(
+            "Voice message too long! Maximum duration is 30 minutes.\n"
+            f"Your message: {duration // 60} minutes {duration % 60} seconds"
+        )
+        return
+
+    await update.message.reply_text("🎙️ Processing voice message... Please wait.")
+
+    try:
+        # Download the voice file
+        file = await voice.get_file()
+        audio_bytes = await file.download_as_bytearray()
+
+        # Transcribe using Gemini
+        gemini = get_gemini_client()
+        transcript = await gemini.transcribe_audio(bytes(audio_bytes), "audio/ogg")
+
+        if not transcript:
+            await update.message.reply_text(
+                "Sorry, I couldn't transcribe the audio. Please try again."
+            )
+            return
+
+        # Store transcript temporarily for processing
+        context.user_data["pending_voice"] = {
+            "transcript": transcript,
+            "duration": duration,
+            "message_id": update.message.message_id
+        }
+
+        # Show preview and processing options
+        preview = transcript[:300] + "..." if len(transcript) > 300 else transcript
+        duration_str = f"{duration // 60}m {duration % 60}s"
+
+        await update.message.reply_text(
+            f"✅ *Transcription Complete!* ({duration_str})\n\n"
+            f"📝 Preview:\n_{preview}_\n\n"
+            "What would you like me to do with this?",
+            reply_markup=get_voice_processing_keyboard(update.message.message_id),
+            parse_mode="Markdown"
+        )
+
+    except Exception as e:
+        logger.error(f"Voice processing error: {e}")
+        await update.message.reply_text(
+            f"Error processing voice message: {e}"
+        )
+
+
+async def notes_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /notes command - list and manage voice notes."""
+    chat_id = update.effective_chat.id
+    args = context.args
+
+    if args:
+        # Check if searching or viewing specific note
+        if args[0].lower() == "search" and len(args) > 1:
+            query = " ".join(args[1:])
+            notes = db.search_voice_notes(chat_id, query)
+            if not notes:
+                await update.message.reply_text(f"No notes found for '{query}'.")
+                return
+
+            lines = [f"🔍 Found {len(notes)} note(s) for '{query}':"]
+            for note in notes[:10]:
+                title = note.get("title") or f"Note #{note['id']}"
+                created = note.get("created_at", "")[:10]
+                ptype = note.get("processing_type", "").title()
+                lines.append(f"\n[ID:{note['id']}] {title}\n  Type: {ptype} | {created}")
+
+            await update.message.reply_text(
+                "\n".join(lines),
+                reply_markup=get_notes_list_keyboard(notes)
+            )
+            return
+
+        # View specific note by ID
+        try:
+            note_id = int(args[0])
+            note = db.get_voice_note_by_id(note_id)
+            if not note:
+                await update.message.reply_text(f"Note #{note_id} not found.")
+                return
+
+            title = note.get("title") or f"Note #{note_id}"
+            ptype = note.get("processing_type", "").title()
+            created = note.get("created_at", "")[:16].replace("T", " ")
+            duration = note.get("duration_seconds", 0)
+            duration_str = f"{duration // 60}m {duration % 60}s" if duration else "N/A"
+
+            # Show processed content (truncated if too long)
+            content = note.get("processed_content", "")
+            if len(content) > 3000:
+                content = content[:3000] + "\n\n... (truncated, use 'Full Content' button to see all)"
+
+            await update.message.reply_text(
+                f"📄 *{title}*\n"
+                f"Type: {ptype} | Duration: {duration_str}\n"
+                f"Created: {created}\n\n"
+                f"{content}",
+                reply_markup=get_note_actions_keyboard(note_id),
+                parse_mode="Markdown"
+            )
+            return
+        except ValueError:
+            pass
+
+    # List all notes
+    notes = db.get_voice_notes(chat_id, limit=10)
+
+    if not notes:
+        await update.message.reply_text(
+            "📝 No voice notes yet.\n\n"
+            "Send me a voice message and I'll:\n"
+            "- Transcribe it\n"
+            "- Create summaries or meeting minutes\n"
+            "- Extract tasks and action items\n"
+            "- Format as study notes\n\n"
+            "Try it now!"
+        )
+        return
+
+    lines = ["📝 *Your Voice Notes:*"]
+    for note in notes:
+        title = note.get("title") or f"Note #{note['id']}"
+        ptype = note.get("processing_type", "").title()
+        created = note.get("created_at", "")[:10]
+        lines.append(f"\n[ID:{note['id']}] {title}\n  {ptype} | {created}")
+
+    await update.message.reply_text(
+        "\n".join(lines) + "\n\nUse /notes <id> to view a specific note.",
+        reply_markup=get_notes_list_keyboard(notes),
+        parse_mode="Markdown"
+    )
+
+
+async def suggest_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /suggest command - get AI-powered suggestions."""
+    from ..ai.gemini_client import get_gemini_client
+
+    await update.message.reply_text("🤔 Analyzing your tasks and schedule...")
+
+    try:
+        # Get all relevant data
+        data = db.get_data_for_suggestions()
+
+        # Check if there's anything to analyze
+        total_items = (
+            len(data.get("assignments", [])) +
+            len(data.get("tasks", [])) +
+            len(data.get("todos", []))
+        )
+
+        if total_items == 0:
+            await update.message.reply_text(
+                "📊 No pending items to analyze!\n\n"
+                "Add some assignments, tasks, or TODOs first, then I can give you suggestions."
+            )
+            return
+
+        # Get AI suggestions
+        gemini = get_gemini_client()
+        suggestions = await gemini.get_ai_suggestions(data)
+
+        if not suggestions:
+            await update.message.reply_text(
+                "Sorry, I couldn't generate suggestions right now. Please try again."
+            )
+            return
+
+        await update.message.reply_text(
+            f"💡 *AI Suggestions*\n\n{suggestions}",
+            reply_markup=get_content_with_menu_keyboard(),
+            parse_mode="Markdown"
+        )
+
+    except Exception as e:
+        logger.error(f"Suggestions error: {e}")
+        await update.message.reply_text(f"Error generating suggestions: {e}")
 
 
 async def setdate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1990,6 +2192,202 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             text=f"Exporting {export_type}..."
         )
 
+    # Voice processing callbacks
+    elif data.startswith("voice_"):
+        from ..ai.gemini_client import get_gemini_client
+
+        parts = data.split("_")
+        action = parts[1]
+        message_id = int(parts[2]) if len(parts) > 2 else 0
+
+        # Get pending voice data
+        pending = context.user_data.get("pending_voice")
+        if not pending:
+            await query.edit_message_text(
+                "Voice data expired. Please send a new voice message.",
+                reply_markup=get_content_with_menu_keyboard()
+            )
+            return
+
+        transcript = pending.get("transcript", "")
+        duration = pending.get("duration", 0)
+
+        if action == "cancel":
+            del context.user_data["pending_voice"]
+            await query.edit_message_text(
+                "Voice processing cancelled.",
+                reply_markup=get_content_with_menu_keyboard()
+            )
+            return
+
+        # Map action to processing type
+        type_map = {
+            "summary": "summary",
+            "minutes": "minutes",
+            "tasks": "tasks",
+            "study": "study",
+            "transcript": "transcript",
+            "smart": "smart"
+        }
+
+        processing_type = type_map.get(action, "summary")
+
+        await query.edit_message_text(f"🔄 Processing as {processing_type}...")
+
+        try:
+            gemini = get_gemini_client()
+
+            if processing_type == "transcript":
+                # Just save the raw transcript
+                processed_content = transcript
+            else:
+                # Process with AI
+                processed_content = await gemini.process_audio_content(transcript, processing_type)
+
+            if not processed_content:
+                await query.edit_message_text(
+                    "Failed to process content. Please try again.",
+                    reply_markup=get_content_with_menu_keyboard()
+                )
+                return
+
+            # Generate title from first line or summary
+            title_preview = processed_content[:50].split("\n")[0]
+            if len(title_preview) > 40:
+                title_preview = title_preview[:37] + "..."
+
+            # Save to database
+            note_id = db.add_voice_note(
+                chat_id=chat_id,
+                original_transcript=transcript,
+                processed_content=processed_content,
+                processing_type=processing_type,
+                duration_seconds=duration,
+                title=title_preview
+            )
+
+            # Clean up pending data
+            del context.user_data["pending_voice"]
+
+            # Show result
+            display_content = processed_content[:2000]
+            if len(processed_content) > 2000:
+                display_content += "\n\n... (truncated)"
+
+            await query.edit_message_text(
+                f"✅ *Saved as {processing_type.title()}!*\n"
+                f"Note ID: {note_id}\n\n"
+                f"{display_content}\n\n"
+                "_Use /notes to see all your notes._",
+                reply_markup=get_note_actions_keyboard(note_id),
+                parse_mode="Markdown"
+            )
+
+        except Exception as e:
+            logger.error(f"Voice processing callback error: {e}")
+            await query.edit_message_text(
+                f"Error processing: {e}",
+                reply_markup=get_content_with_menu_keyboard()
+            )
+
+    # Notes list callback
+    elif data == "cmd_notes":
+        notes = db.get_voice_notes(chat_id, limit=10)
+        if not notes:
+            await query.edit_message_text(
+                "📝 No voice notes yet.\n\nSend a voice message to get started!",
+                reply_markup=get_content_with_menu_keyboard()
+            )
+            return
+
+        lines = ["📝 *Your Voice Notes:*"]
+        for note in notes:
+            title = note.get("title") or f"Note #{note['id']}"
+            ptype = note.get("processing_type", "").title()
+            created = note.get("created_at", "")[:10]
+            lines.append(f"\n[ID:{note['id']}] {title}\n  {ptype} | {created}")
+
+        await query.edit_message_text(
+            "\n".join(lines),
+            reply_markup=get_notes_list_keyboard(notes),
+            parse_mode="Markdown"
+        )
+
+    # View note callback
+    elif data.startswith("view_note_"):
+        note_id = int(data.split("_")[2])
+        note = db.get_voice_note_by_id(note_id)
+
+        if not note:
+            await query.edit_message_text(
+                f"Note #{note_id} not found.",
+                reply_markup=get_content_with_menu_keyboard()
+            )
+            return
+
+        title = note.get("title") or f"Note #{note_id}"
+        ptype = note.get("processing_type", "").title()
+        created = note.get("created_at", "")[:16].replace("T", " ")
+        content = note.get("processed_content", "")[:2500]
+
+        await query.edit_message_text(
+            f"📄 *{title}*\n"
+            f"Type: {ptype} | Created: {created}\n\n"
+            f"{content}",
+            reply_markup=get_note_actions_keyboard(note_id),
+            parse_mode="Markdown"
+        )
+
+    # Note full content callback
+    elif data.startswith("note_full_"):
+        note_id = int(data.split("_")[2])
+        note = db.get_voice_note_by_id(note_id)
+
+        if note:
+            content = note.get("processed_content", "")
+            # Split into multiple messages if too long
+            if len(content) > 4000:
+                await query.edit_message_text(
+                    content[:4000] + "\n\n... (continued)",
+                    reply_markup=get_note_actions_keyboard(note_id)
+                )
+                # Send rest as new message
+                await context.bot.send_message(chat_id=chat_id, text=content[4000:])
+            else:
+                await query.edit_message_text(
+                    content,
+                    reply_markup=get_note_actions_keyboard(note_id)
+                )
+
+    # Note transcript callback
+    elif data.startswith("note_transcript_"):
+        note_id = int(data.split("_")[2])
+        note = db.get_voice_note_by_id(note_id)
+
+        if note:
+            transcript = note.get("original_transcript", "")[:4000]
+            await query.edit_message_text(
+                f"📝 *Original Transcript*\n\n{transcript}",
+                reply_markup=get_note_actions_keyboard(note_id),
+                parse_mode="Markdown"
+            )
+
+    # Note delete callback
+    elif data.startswith("note_delete_"):
+        note_id = int(data.split("_")[2])
+        deleted = db.delete_voice_note(note_id)
+
+        if deleted:
+            await query.edit_message_text(
+                f"🗑️ Note #{note_id} deleted.",
+                reply_markup=get_content_with_menu_keyboard()
+            )
+        else:
+            await query.edit_message_text(
+                f"Note #{note_id} not found.",
+                reply_markup=get_content_with_menu_keyboard()
+            )
+
 
 def register_handlers(application: Application) -> None:
     """Register all command handlers with the application."""
@@ -2027,6 +2425,10 @@ def register_handlers(application: Application) -> None:
     application.add_handler(CommandHandler("language", language_command))
     application.add_handler(CommandHandler("export", export_command))
 
+    # Voice notes and AI suggestions
+    application.add_handler(CommandHandler("notes", notes_command))
+    application.add_handler(CommandHandler("suggest", suggest_command))
+
     # Debug commands
     application.add_handler(CommandHandler("setdate", setdate_command))
     application.add_handler(CommandHandler("resetdate", resetdate_command))
@@ -2039,6 +2441,7 @@ def register_handlers(application: Application) -> None:
 
     # Message handlers (lower priority than commands)
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo_message))
+    application.add_handler(MessageHandler(filters.VOICE, handle_voice_message))
     application.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND,
         handle_text_message

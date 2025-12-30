@@ -196,3 +196,61 @@ def get_content_with_menu_keyboard() -> InlineKeyboardMarkup:
         ],
     ]
     return InlineKeyboardMarkup(keyboard)
+
+
+def get_voice_processing_keyboard(message_id: int) -> InlineKeyboardMarkup:
+    """Create voice message processing options keyboard."""
+    keyboard = [
+        [
+            InlineKeyboardButton("📝 Summary", callback_data=f"voice_summary_{message_id}"),
+            InlineKeyboardButton("📋 Meeting Minutes", callback_data=f"voice_minutes_{message_id}"),
+        ],
+        [
+            InlineKeyboardButton("✅ Extract Tasks", callback_data=f"voice_tasks_{message_id}"),
+            InlineKeyboardButton("📚 Study Notes", callback_data=f"voice_study_{message_id}"),
+        ],
+        [
+            InlineKeyboardButton("💾 Save Transcript", callback_data=f"voice_transcript_{message_id}"),
+            InlineKeyboardButton("🎯 Smart Analysis", callback_data=f"voice_smart_{message_id}"),
+        ],
+        [
+            InlineKeyboardButton("❌ Cancel", callback_data=f"voice_cancel_{message_id}"),
+        ],
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
+def get_notes_list_keyboard(notes: list) -> InlineKeyboardMarkup:
+    """Create keyboard for voice notes list with view buttons."""
+    keyboard = []
+    for note in notes[:5]:  # Show max 5 notes
+        note_id = note.get("id")
+        title = note.get("title") or f"Note #{note_id}"
+        if len(title) > 25:
+            title = title[:22] + "..."
+        keyboard.append([
+            InlineKeyboardButton(f"📄 {title}", callback_data=f"view_note_{note_id}")
+        ])
+
+    keyboard.append([
+        InlineKeyboardButton("🔙 Back to Menu", callback_data="menu_main"),
+    ])
+    return InlineKeyboardMarkup(keyboard)
+
+
+def get_note_actions_keyboard(note_id: int) -> InlineKeyboardMarkup:
+    """Create action buttons for a voice note."""
+    keyboard = [
+        [
+            InlineKeyboardButton("📖 Full Content", callback_data=f"note_full_{note_id}"),
+            InlineKeyboardButton("📝 Original", callback_data=f"note_transcript_{note_id}"),
+        ],
+        [
+            InlineKeyboardButton("✏️ Rename", callback_data=f"note_rename_{note_id}"),
+            InlineKeyboardButton("🗑️ Delete", callback_data=f"note_delete_{note_id}"),
+        ],
+        [
+            InlineKeyboardButton("🔙 Back to Notes", callback_data="cmd_notes"),
+        ],
+    ]
+    return InlineKeyboardMarkup(keyboard)

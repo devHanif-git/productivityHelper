@@ -118,6 +118,19 @@ CREATE TABLE IF NOT EXISTS online_overrides (
     specific_date TEXT,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Voice notes (transcriptions and processed audio content)
+CREATE TABLE IF NOT EXISTS voice_notes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id INTEGER NOT NULL,
+    original_transcript TEXT,
+    processed_content TEXT,
+    processing_type TEXT NOT NULL,
+    duration_seconds INTEGER,
+    title TEXT,
+    tags TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 

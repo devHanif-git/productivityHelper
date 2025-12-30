@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-UTeM Student Assistant Bot - A Telegram bot helping UTeM students manage academic schedules, assignments, tasks, and TODOs with AI-powered image recognition (Google Gemini) and proactive notifications.
+UTeM Student Assistant Bot - A Telegram bot helping UTeM students manage academic schedules, assignments, tasks, and TODOs with AI-powered features including image recognition, voice transcription, and smart suggestions (Google Gemini).
 
 ## Common Commands
 
@@ -31,43 +31,45 @@ pip install -r requirements.txt
 ### Core Components
 
 **Bot Layer** (`src/bot/`)
-- `handlers.py` - Telegram command handlers (`/start`, `/help`, `/tomorrow`, `/assignments`, etc.) and message routing by intent. Contains debug commands (`/setdate`, `/settime`, `/trigger`) for testing time-sensitive features.
-- `conversations.py` - Multi-step conversation flows (onboarding, assignment confirmation)
+- `handlers.py` - Telegram command handlers and message routing by intent. Handles text, photos, and voice messages. Contains debug commands (`/setdate`, `/settime`, `/trigger`) for testing.
+- `conversations.py` - Multi-step conversation flows (onboarding, assignment confirmation) and response formatters
+- `keyboards.py` - Telegram inline keyboard layouts (main menu, settings, voice processing options, note actions)
 
 **AI Layer** (`src/ai/`)
-- `gemini_client.py` - Google Gemini API wrapper (singleton pattern via `get_gemini_client()`). Supports text prompts and vision/image analysis.
-- `intent_parser.py` - NLP intent classification with `Intent` enum. Uses regex for common queries, Gemini for complex messages. Returns `ClassificationResult` with intent and `ParsedEntities`.
+- `gemini_client.py` - Google Gemini API wrapper (singleton via `get_gemini_client()`). Supports:
+  - Text prompts (`send_text`)
+  - Image analysis (`send_image`, `send_image_with_json`)
+  - Audio transcription (`transcribe_audio`, `process_audio_content`)
+  - AI suggestions (`get_ai_suggestions`)
+- `intent_parser.py` - NLP intent classification with `Intent` enum. Uses regex for common queries, Gemini for complex messages.
 - `image_parser.py` - Detects image types (calendar, timetable, assignment) and extracts structured data
 
 **Database Layer** (`src/database/`)
-- `models.py` - SQLite schema (user_config, events, schedule, assignments, tasks, todos). Uses `row_factory = sqlite3.Row`.
+- `models.py` - SQLite schema. Tables: user_config, events, schedule, assignments, tasks, todos, online_overrides, voice_notes, action_history, notification_settings
 - `operations.py` - `DatabaseOperations` class with CRUD methods for all tables
 
 **Scheduler** (`src/scheduler/`)
-- `notifications.py` - `NotificationScheduler` class using APScheduler. Handles:
-  - Daily briefings (10PM class briefing, 8PM off-day alert, 12AM TODO review)
-  - Escalating assignment reminders (7 levels: 3 days → due)
-  - Task reminders (1 day before, 2 hours before)
-  - TODO reminders (1 hour before for time-specific)
-  - Semester starting notification (1 week before break ends)
+- `notifications.py` - `NotificationScheduler` class using APScheduler. Daily briefings include AI-powered suggestions when pending items exist.
 
 **Utils** (`src/utils/`)
 - `semester_logic.py` - Week calculation (14-week semester with mid-break), break classification, date helpers
-- `logging_config.py` - Logging setup with file output
-- `error_handlers.py` - Global error handling
+- `translations.py` - Multi-language support (English/Malay) via `get_text(key, lang)`
 
 ### Data Flow
-1. User sends message/image to Telegram
+1. User sends message/image/voice to Telegram
 2. `handlers.py` receives via python-telegram-bot
 3. For text: `intent_parser.py` classifies intent using regex or Gemini
 4. For images: `image_parser.py` detects type and extracts data
-5. Handler executes action (database CRUD via `operations.py`)
-6. Background: `NotificationScheduler` runs scheduled jobs every 30 min / at specific times
+5. For voice: `gemini_client.py` transcribes, then user selects processing type
+6. Handler executes action (database CRUD via `operations.py`)
+7. Response includes inline keyboard for menu persistence
 
 ### Key Patterns
 - **Timezone**: All times use `Asia/Kuala_Lumpur` (MY_TZ)
-- **Test Overrides**: `get_today()` and `get_now()` in handlers.py support `_test_date_override` / `_test_time_override` for debugging
+- **Test Overrides**: `get_today()` and `get_now()` support `_test_date_override` / `_test_time_override`
 - **Semester Structure**: 14 weeks (Week 1-6, mid-break, Week 7-14, inter-semester break)
+- **Menu Persistence**: Inline keyboards remain visible after button presses via `get_content_with_menu_keyboard()`
+- **Callback Handling**: All inline button callbacks go through `callback_query_handler()` in handlers.py
 
 ## Environment Variables
 
@@ -79,7 +81,17 @@ DATABASE_PATH=data/bot.db  (optional, defaults to data/bot.db)
 
 ## Testing Debug Commands
 
-The bot includes debug commands for testing time-sensitive notifications:
 - `/setdate YYYY-MM-DD` - Override current date
 - `/settime HH:MM` - Override current time
 - `/trigger <type>` - Manually trigger notifications (briefing, offday, midnight, assignments, tasks, todos, semester)
+
+## Adding New Features
+
+When adding features:
+1. Add database table/columns in `models.py` if needed
+2. Add CRUD operations in `operations.py`
+3. Add command handler in `handlers.py` and register in `register_handlers()`
+4. Add callback handlers in `callback_query_handler()` for inline buttons
+5. Add keyboard layouts in `keyboards.py` if interactive UI needed
+6. Add intent patterns in `intent_parser.py` for natural language support
+7. Add translations in `translations.py` for multi-language support

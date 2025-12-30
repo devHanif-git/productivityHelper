@@ -172,7 +172,7 @@ class NotificationScheduler:
     # ==================== Daily Briefings ====================
 
     async def send_class_briefing(self):
-        """10PM briefing: Tomorrow's classes."""
+        """10PM briefing: Tomorrow's classes with optional AI suggestions."""
         logger.info("Running 10PM class briefing")
 
         chat_ids = await self._get_all_chat_ids()
@@ -196,9 +196,57 @@ class NotificationScheduler:
         # Format message (handles both with classes and no classes)
         message = self._format_class_briefing(tomorrow, schedule)
 
+        # Try to add AI suggestions
+        suggestions = await self._get_brief_suggestions()
+        if suggestions:
+            message += f"\n\n💡 *Today's Tip:*\n{suggestions}"
+
         # Send to all users
         for chat_id in chat_ids:
             await self._send_notification(chat_id, message)
+
+    async def _get_brief_suggestions(self) -> Optional[str]:
+        """Get a brief AI suggestion for the daily briefing."""
+        try:
+            from ..ai.gemini_client import get_gemini_client
+
+            # Get pending items count
+            counts = db.get_pending_counts()
+            total = counts["assignments"] + counts["tasks"] + counts["todos"]
+
+            if total == 0:
+                return None
+
+            # Get data for suggestions
+            data = db.get_data_for_suggestions()
+
+            # Create a brief prompt for quick suggestions
+            gemini = get_gemini_client()
+            prompt = f"""Based on:
+- {counts['assignments']} pending assignments
+- {counts['tasks']} upcoming tasks
+- {counts['todos']} todos
+
+Give ONE brief, actionable suggestion (max 2 sentences) for what the student should prioritize today.
+Focus on the most urgent item if any."""
+
+            if data.get("assignments"):
+                assignments_info = ", ".join(
+                    f"{a['title']} (due {a['due_date']})" for a in data["assignments"][:3]
+                )
+                prompt += f"\n\nUpcoming assignments: {assignments_info}"
+
+            suggestion = await gemini.send_text(prompt)
+            if suggestion and len(suggestion) < 300:
+                return suggestion.strip()
+            elif suggestion:
+                # Truncate if too long
+                return suggestion[:280].rsplit(".", 1)[0] + "."
+
+        except Exception as e:
+            logger.warning(f"Could not get AI suggestions: {e}")
+
+        return None
 
     def _format_class_briefing(self, tomorrow: date, schedule: list[dict]) -> str:
         """Format the class briefing message."""

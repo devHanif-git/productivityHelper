@@ -234,6 +234,13 @@ ALTER TABLE events ADD COLUMN subject_code TEXT;
 14. [x] **Add subject name lookup method**
 15. [x] **Enhance intent parser to match subject names**
 
+### Step 6: Voice & AI Features (4 items) - DONE
+16. [x] **Add voice message transcription** using Gemini
+17. [x] **Add voice processing options** (summary, minutes, tasks, study notes, smart)
+18. [x] **Add /notes command** for voice note retrieval
+19. [x] **Add /suggest command** for AI-powered suggestions
+20. [x] **Integrate AI suggestions** into daily briefing
+
 ---
 
 ## CRITICAL FILES TO MODIFY
@@ -250,9 +257,9 @@ ALTER TABLE events ADD COLUMN subject_code TEXT;
 
 ---
 
-## TOTAL: 15 Implementation Items
+## TOTAL: 20 Implementation Items
 
-**Estimated scope:** Medium-Large (touches 7 core files, 1 new DB table)
+**Estimated scope:** Large (touches 8+ core files, 2 new DB tables)
 
 ---
 
@@ -463,6 +470,56 @@ ALTER TABLE events ADD COLUMN subject_code TEXT;
 
 ---
 
+### Priority 5: Voice & AI Features - DONE
+
+#### Feature: Voice Messages & Notes
+**Status:** IMPLEMENTED
+**Description:** Accept voice messages for transcription and intelligent processing
+
+**Commands:**
+- Send any voice message (up to 30 minutes)
+- `/notes` - List all saved voice notes
+- `/notes <id>` - View specific note
+- `/notes search <query>` - Search notes by content
+
+**Processing Options (shown after sending voice):**
+- Summary - Condensed key points
+- Meeting Minutes - Formal format with action items
+- Extract Tasks - Find todos/assignments mentioned
+- Study Notes - Format as structured study material
+- Save Transcript - Raw transcription only
+- Smart Analysis - AI decides best format based on content
+
+**Files created/modified:**
+- `src/database/models.py` - Added `voice_notes` table
+- `src/database/operations.py` - Added voice note CRUD operations
+- `src/ai/gemini_client.py` - Added `transcribe_audio()`, `process_audio_content()` methods
+- `src/bot/keyboards.py` - Added voice processing and notes keyboards
+- `src/bot/handlers.py` - Added voice message handler, `/notes` command
+
+---
+
+#### Feature: AI-Powered Suggestions
+**Status:** IMPLEMENTED
+**Description:** Use Gemini to suggest task priorities, study times
+
+**Commands:**
+- `/suggest` - Get AI-powered suggestions based on pending items and schedule
+
+**Features:**
+- Analyzes assignments, tasks, todos, schedule, and exams
+- Provides priority focus, time management tips, deadline warnings
+- Integrated into daily 10PM briefing with brief tip
+- Uses Gemini AI for smart contextual suggestions
+
+**Files modified:**
+- `src/ai/gemini_client.py` - Added `get_ai_suggestions()` method
+- `src/database/operations.py` - Added `get_data_for_suggestions()` method
+- `src/bot/handlers.py` - Added `/suggest` command
+- `src/scheduler/notifications.py` - Integrated brief suggestions into daily briefing
+
+---
+
 ## FUTURE IMPLEMENTATION (Backlog)
 
 ### Still To Be Implemented
@@ -480,22 +537,6 @@ ALTER TABLE events ADD COLUMN subject_code TEXT;
 
 ---
 
-#### Feature: AI-Powered Suggestions
-**Status:** Not implemented
-**Priority:** Low
-**Description:** Use Gemini to suggest task priorities, study times
-
-**Examples:**
-- "You have 3 assignments due this week. I suggest starting with Database report as it's worth more marks."
-- "Based on your schedule, you have free time Tuesday afternoon for studying."
-
-**Implementation approach:**
-- Analyze user's pending items and schedule
-- Send context to Gemini for prioritization suggestions
-- Proactive suggestions during daily briefings
-
----
-
 #### Feature: Calendar Sync
 **Status:** Not implemented
 **Priority:** Low
@@ -508,18 +549,6 @@ ALTER TABLE events ADD COLUMN subject_code TEXT;
 - OAuth2 authentication flow
 
 **Complexity:** HIGH (requires Google API integration)
-
----
-
-#### Feature: Voice Messages
-**Status:** Not implemented
-**Priority:** Low
-**Description:** Accept voice messages for adding items
-
-**Implementation approach:**
-- Use Telegram voice message API to receive audio
-- Send to Gemini for transcription
-- Process transcribed text as normal message
 
 ---
 
