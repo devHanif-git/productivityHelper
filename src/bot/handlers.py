@@ -1080,7 +1080,9 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         subject_input = entities.subject_code
         exam_type = entities.title or "exam"
         date_str = entities.date
-        class_type = entities.description  # LAB or LEC
+        exam_time = entities.time  # Time from user input
+        exam_location = entities.location  # Location from user input
+        class_type = entities.description  # LAB or LEC (from lab test pattern)
 
         if subject_input:
             # Try to resolve subject alias (OS -> Operating System / actual code)
@@ -1097,16 +1099,17 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             # Determine the week number
             week_num = None
             if date_str:
-                if "next week" in date_str.lower() or "minggu depan" in date_str.lower():
+                date_str_check = date_str.lower() if date_str else ""
+                if "next week" in date_str_check or "minggu depan" in date_str_check:
                     if semester_start:
                         week_num = get_next_week(get_today(), semester_start, events)
-                elif "this week" in date_str.lower() or "minggu ni" in date_str.lower():
+                elif "this week" in date_str_check or "minggu ni" in date_str_check:
                     if semester_start:
                         current_week = get_current_week(get_today(), semester_start, events)
                         if isinstance(current_week, int):
                             week_num = current_week
 
-            # Look up the schedule to find the actual day
+            # Look up the schedule to find the actual day (only for week-based dates)
             actual_date = None
             schedule_day = None
             schedule_time = None
@@ -1138,16 +1141,25 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                     actual_date = week_start + timedelta(days=day_of_week)
                     date_str = actual_date.isoformat()
 
-            # Build exam name with class type
+            # Use time from user input if no schedule lookup, or user provided specific time
+            final_time = exam_time or schedule_time
+
+            # Build exam name with class type and location
             exam_name = exam_type.replace("labtest", "Lab Test").replace("lab test", "Lab Test").title()
             if class_type:
                 exam_name = f"{exam_name} ({class_type})"
+
+            # Build full name with location if provided
+            full_name = f"{exam_name} - {subject}"
+            if exam_location:
+                full_name += f" at {exam_location.upper()}"
 
             exam_id = db.add_exam(
                 subject_code=subject,
                 exam_type=exam_type,
                 exam_date=date_str,
-                exam_time=schedule_time
+                exam_time=final_time,
+                name=full_name
             )
             db.add_action_history("add", "events", exam_id)
 
@@ -1158,10 +1170,17 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                 if week_num:
                     response += f" (Week {week_num})"
             elif date_str:
-                response += f" on {date_str}"
-            if schedule_time:
-                response += f"\n⏰ {schedule_time}"
-            response += f"\n🔔 Reminders will be sent before the test"
+                # Try to format the date nicely
+                try:
+                    parsed = datetime.strptime(date_str, "%Y-%m-%d")
+                    response += f"\n📅 {parsed.strftime('%A, %d %b %Y')}"
+                except ValueError:
+                    response += f" on {date_str}"
+            if final_time:
+                response += f"\n⏰ {final_time}"
+            if exam_location:
+                response += f"\n📍 {exam_location.upper()}"
+            response += f"\n🔔 Reminders will be sent before the exam"
             response += f"\nID: {exam_id}"
 
             await update.message.reply_text(response)
@@ -1169,7 +1188,8 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             await update.message.reply_text(
                 "Please specify subject and date. Example:\n"
                 "💬 \"Lab test for OS next week on lab section\"\n"
-                "💬 \"Final exam BITP1113 on 15 Jan 2025\""
+                "💬 \"Final exam BITP1113 on 15 Jan 2025\"\n"
+                "💬 \"Final exam Algo 26 jan 9am at BK FPTT\""
             )
 
     elif intent == Intent.QUERY_EXAMS:
@@ -1745,6 +1765,7 @@ async def trigger_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         "assignments": "check_assignment_reminders",
         "tasks": "check_task_reminders",
         "todos": "check_todo_reminders",
+        "exams": "check_exam_reminders",
         "semester": "check_semester_starting",
     }
 
@@ -1883,6 +1904,7 @@ async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             "  /delete assignment 5\n"
             "  /delete task 3\n"
             "  /delete todo 1\n"
+            "  /delete exam 17\n"
             "  /delete online 2\n"
             "  /delete event 10"
         )
@@ -1916,10 +1938,12 @@ async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             week = item.get("week_number")
             date_val = item.get("specific_date")
             item_name = f"{subject} online on {'Week ' + str(week) if week else date_val}"
-    elif item_type == "event":
+    elif item_type in ("event", "exam"):
+        # Both "exam" and "event" look up in events table
         events = db.get_all_events()
         item = next((e for e in events if e.get("id") == item_id), None)
         item_name = item.get("name_en") or item.get("name", "Unknown") if item else ""
+        item_type = "event"  # Normalize to "event" for deletion
 
     if not item:
         await update.message.reply_text(f"{item_type.title()} #{item_id} not found.")

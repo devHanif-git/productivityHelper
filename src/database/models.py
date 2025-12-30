@@ -29,6 +29,8 @@ CREATE TABLE IF NOT EXISTS events (
     end_date TEXT,
     affects_classes INTEGER DEFAULT 1,
     subject_code TEXT,
+    exam_time TEXT,
+    last_reminder_level INTEGER DEFAULT 0,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -150,5 +152,25 @@ def init_db(db_path: str) -> None:
     try:
         conn.executescript(SCHEMA)
         conn.commit()
+
+        # Run migrations for existing databases
+        _run_migrations(conn)
     finally:
         conn.close()
+
+
+def _run_migrations(conn: sqlite3.Connection) -> None:
+    """Run database migrations for existing databases."""
+    cursor = conn.cursor()
+
+    # Check if events table has exam_time column
+    cursor.execute("PRAGMA table_info(events)")
+    columns = [col[1] for col in cursor.fetchall()]
+
+    if "exam_time" not in columns:
+        cursor.execute("ALTER TABLE events ADD COLUMN exam_time TEXT")
+        conn.commit()
+
+    if "last_reminder_level" not in columns:
+        cursor.execute("ALTER TABLE events ADD COLUMN last_reminder_level INTEGER DEFAULT 0")
+        conn.commit()

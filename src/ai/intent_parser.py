@@ -162,11 +162,25 @@ def _parse_relative_date(date_str: str) -> Optional[str]:
     except ValueError:
         pass
 
-    # Try common date formats
-    formats = ["%d/%m/%Y", "%d-%m-%Y", "%Y/%m/%d", "%d %b %Y", "%d %B %Y"]
-    for fmt in formats:
+    # Try common date formats WITH year
+    formats_with_year = ["%d/%m/%Y", "%d-%m-%Y", "%Y/%m/%d", "%d %b %Y", "%d %B %Y"]
+    for fmt in formats_with_year:
         try:
             return datetime.strptime(date_str, fmt).date().isoformat()
+        except ValueError:
+            continue
+
+    # Try date formats WITHOUT year (assume current or next year)
+    formats_without_year = ["%d %b", "%d %B", "%d/%m", "%d-%m"]
+    for fmt in formats_without_year:
+        try:
+            parsed = datetime.strptime(date_str, fmt)
+            # Use current year initially
+            result_date = parsed.replace(year=today.year).date()
+            # If the date is in the past, assume next year
+            if result_date < today:
+                result_date = parsed.replace(year=today.year + 1).date()
+            return result_date.isoformat()
         except ValueError:
             continue
 
@@ -545,18 +559,50 @@ async def classify_message(message: str) -> ClassificationResult:
             confidence=0.90
         )
 
-    # Set exam patterns (e.g., "final exam BITP1113 on 15 Jan 2025")
-    set_exam_match = re.search(
-        r"(final|midterm|mid-term|ujian|peperiksaan)\s*(exam|examination|test)?\s+(\w+)\s+(on|at|pada)\s+(.+)",
+    # Set exam patterns (e.g., "final exam BITP1113 on 15 Jan 2025", "final exam Algo 26 jan 9am at BK")
+    # More flexible pattern to capture subject name (can be multiple words)
+    EXAM_TYPES = r"(final|midterm|mid-term|ujian\s*akhir|peperiksaan\s*akhir|ujian|peperiksaan)"
+    EXAM_WORDS = r"(exam|examination|test|peperiksaan)?"
+    # Date patterns: "26 jan", "15 Jan 2025", "tomorrow", "next week", etc.
+    DATE_PATTERN = r"(\d{1,2}\s*(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*(?:\s*\d{4})?|tomorrow|esok|next\s+\w+|minggu\s+depan|\d{4}-\d{2}-\d{2}|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?)"
+
+    # Pattern: <exam_type> [exam] <subject> [on/at]? <date> [time] [at location]
+    exam_match = re.search(
+        rf"{EXAM_TYPES}\s*{EXAM_WORDS}\s+(.+?)\s+(?:on\s+|at\s+|pada\s+)?{DATE_PATTERN}",
         message_lower
     )
-    if set_exam_match:
-        exam_type = set_exam_match.group(1)
-        subject = set_exam_match.group(3).upper()
-        date_part = set_exam_match.group(5).strip()
+    if exam_match:
+        exam_type = exam_match.group(1).split()[0]  # Get first word (final/midterm/etc)
+        subject = exam_match.group(3).strip()  # Subject name (can be multiple words)
+        date_part = exam_match.group(4).strip()
+
+        # Extract time if present (e.g., "9am", "10:00")
+        time_match = re.search(r"(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)", message_lower[exam_match.end(4):])
+        time_part = _parse_time(time_match.group(1)) if time_match else None
+
+        # Extract location if present (after "at" at the end)
+        location = None
+        rest = message_lower[exam_match.end():]
+        loc_match = re.search(r"(?:at|di)\s+(.+?)$", rest)
+        if loc_match:
+            location = loc_match.group(1).strip()
+
+        # Clean up subject - remove leading/trailing prepositions
+        subject = re.sub(r"^(for|untuk)\s+", "", subject).strip()  # Remove leading "for"
+        subject = re.sub(r"\s+(on|at|pada|di)$", "", subject).strip()  # Remove trailing prepositions
+
+        # Parse date to ISO format
+        parsed_date = _parse_relative_date(date_part)
+
         return ClassificationResult(
             intent=Intent.ADD_EXAM,
-            entities=ParsedEntities(subject_code=subject, date=date_part, title=exam_type),
+            entities=ParsedEntities(
+                subject_code=subject.upper() if len(subject) <= 10 else subject.title(),
+                date=parsed_date,
+                time=time_part,
+                title=exam_type,
+                location=location
+            ),
             confidence=0.90
         )
 
@@ -568,13 +614,16 @@ async def classify_message(message: str) -> ClassificationResult:
             confidence=0.90
         )
 
-    # Delete patterns (e.g., "delete assignment 5", "remove todo 3")
+    # Delete patterns (e.g., "delete assignment 5", "remove todo 3", "delete exam 17")
     delete_match = re.search(
-        r"(delete|remove|hapus|buang)\s+(assignment|task|todo|online|event)\s+(\d+)",
+        r"(delete|remove|hapus|buang)\s+(assignment|task|todo|online|event|exam)\s+(\d+)",
         message_lower
     )
     if delete_match:
         item_type = delete_match.group(2)
+        # Treat "exam" as "event" since exams are stored in events table
+        if item_type == "exam":
+            item_type = "event"
         item_id = int(delete_match.group(3))
         return ClassificationResult(
             intent=Intent.DELETE_ITEM,

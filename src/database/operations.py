@@ -229,6 +229,9 @@ class DatabaseOperations:
         Build a mapping of subject name aliases to subject codes.
         Returns dict like {"database design": "BITI1113", "programming": "BITP1113"}
         """
+        # Common filler words to skip when building abbreviations
+        FILLER_WORDS = {"and", "or", "of", "the", "for", "in", "to", "a", "an", "&"}
+
         conn = self._get_conn()
         try:
             cursor = conn.execute(
@@ -241,13 +244,63 @@ class DatabaseOperations:
                 if code:
                     aliases[code.lower()] = code
                 if name:
-                    # Add full name and common abbreviations
-                    aliases[name.lower()] = code
-                    # Add first letters as alias (e.g., "dbd" for "Database Design")
+                    name_lower = name.lower()
+                    # Add full name
+                    aliases[name_lower] = code
+
                     words = name.split()
+                    # Filter out filler words for abbreviation
+                    significant_words = [w for w in words if w.lower() not in FILLER_WORDS]
+
                     if len(words) > 1:
-                        abbrev = "".join(w[0].lower() for w in words if w)
-                        aliases[abbrev] = code
+                        # Add first letters abbreviation WITHOUT filler words
+                        # e.g., "Statistics and Probability" → "sp" (not "sap")
+                        abbrev = "".join(w[0].lower() for w in significant_words if w)
+                        if abbrev:
+                            aliases[abbrev] = code
+
+                        # Also add full abbreviation with all words for compatibility
+                        full_abbrev = "".join(w[0].lower() for w in words if w)
+                        if full_abbrev and full_abbrev != abbrev:
+                            aliases[full_abbrev] = code
+
+                        # Add first 3-4 letters of each word (e.g., "algo anal" for "Algorithm Analysis")
+                        for length in [3, 4]:
+                            short_words = " ".join(w[:length].lower() for w in words if len(w) >= length)
+                            if short_words:
+                                aliases[short_words] = code
+
+                        # Add combinations like "algo analysis", "algorithm anal"
+                        for i in range(len(words)):
+                            for length in [3, 4, 5]:
+                                partial = []
+                                for j, w in enumerate(words):
+                                    if j == i:
+                                        partial.append(w[:length].lower() if len(w) > length else w.lower())
+                                    else:
+                                        partial.append(w.lower())
+                                aliases[" ".join(partial)] = code
+
+                        # Add individual significant words and their prefixes as aliases
+                        # e.g., "statistics", "stats", "stat" all map to the code
+                        for word in significant_words:
+                            word_lower = word.lower()
+                            # Add full word
+                            aliases[word_lower] = code
+                            # Add word prefixes (3, 4, 5, 6 letters)
+                            if len(word_lower) > 4:
+                                for length in [3, 4, 5, 6]:
+                                    aliases[word_lower[:length]] = code
+                                # Add common plural abbreviation (e.g., "stats" for "statistics")
+                                # Pattern: first 4 letters + 's' if word ends in 's'
+                                if word_lower.endswith('s') and len(word_lower) > 5:
+                                    aliases[word_lower[:4] + 's'] = code
+
+                    # Single word - add first few letters
+                    elif len(name) > 4:
+                        for length in [3, 4, 5]:
+                            aliases[name_lower[:length]] = code
+
             return aliases
         finally:
             conn.close()
@@ -820,18 +873,31 @@ class DatabaseOperations:
 
         conn = self._get_conn()
         try:
-            # Store time in name_en if provided
+            # Store time in name_en if provided (for display)
             if exam_time:
                 name_en = f"{name} at {exam_time}"
 
             cursor = conn.execute(
                 """INSERT INTO events
-                   (event_type, name, name_en, start_date, subject_code, affects_classes)
-                   VALUES (?, ?, ?, ?, ?, 0)""",
-                (event_type, name, name_en, exam_date, subject_code)
+                   (event_type, name, name_en, start_date, subject_code, exam_time, affects_classes)
+                   VALUES (?, ?, ?, ?, ?, ?, 0)""",
+                (event_type, name, name_en, exam_date, subject_code, exam_time)
             )
             conn.commit()
             return cursor.lastrowid
+        finally:
+            conn.close()
+
+    def update_exam_reminder_level(self, exam_id: int, level: int) -> bool:
+        """Update the last reminder level for an exam."""
+        conn = self._get_conn()
+        try:
+            conn.execute(
+                "UPDATE events SET last_reminder_level = ? WHERE id = ?",
+                (level, exam_id)
+            )
+            conn.commit()
+            return True
         finally:
             conn.close()
 

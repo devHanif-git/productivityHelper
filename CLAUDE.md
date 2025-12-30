@@ -49,7 +49,7 @@ pip install -r requirements.txt
   - 10:00 PM: Tomorrow's classes briefing
   - 8:00 PM: Off-day alert
   - 12:00 AM: Midnight TODO review
-  - Every 30 min: Assignment/Task/TODO reminder checks
+  - Every 30 min: Assignment/Task/TODO/Exam reminder checks
 
 **Utils** (`src/utils/`)
 - `semester_logic.py` - Week calculation (14-week semester with mid-break), `get_today()`, `get_now()`
@@ -59,10 +59,38 @@ pip install -r requirements.txt
 - **Timezone**: All times use `Asia/Kuala_Lumpur` (MY_TZ)
 - **Test Overrides**: `get_today()` and `get_now()` support `_test_date_override` / `_test_time_override`. Settings menu shows override status with reset buttons
 - **Semester Structure**: 14 weeks (Week 1-6, mid-break, Week 7-14, inter-semester break)
-- **Assignment Reminders**: 7-level escalation (3 days → 2 days → 1 day → 8 hours → 3 hours → 1 hour → due)
-- **Subject Aliases**: `get_subject_aliases()` maps subject names/abbreviations to codes (e.g., "os" → "BITI1213"). Used for NLP matching
+- **Subject Aliases**: `get_subject_aliases()` maps subject names/abbreviations to codes (e.g., "os" → "BITI1213", "sp" → "Statistics and Probability"). Skips filler words (and, or, of) when building abbreviations
 - **Lab Test/Exam**: When adding exams via NLP, system looks up schedule to find actual day/time for the subject's class type (LAB/LEC)
 - **Callback Handling**: All inline button callbacks go through `callback_query_handler()` in handlers.py
+
+### Reminder Systems
+All reminders are checked every 30 minutes. Each level triggers only once per item.
+
+**Assignment Reminders** (7 levels):
+| Level | Hours Before | Message |
+|-------|--------------|---------|
+| 1 | 72h (3 days) | "due in 3 days" |
+| 2 | 48h (2 days) | "due in 2 days" |
+| 3 | 24h (1 day) | "due TOMORROW" |
+| 4 | 8h | "8 hours left" |
+| 5 | 3h | "3 hours left" |
+| 6 | 1h | "1 hour remaining" |
+| 7 | 0h | "NOW DUE" |
+
+**Exam Reminders** (4 levels):
+| Level | Hours Before | Message |
+|-------|--------------|---------|
+| 1 | 168h (1 week) | "Exam in 1 WEEK" |
+| 2 | 72h (3 days) | "Exam in 3 DAYS" |
+| 3 | 24h (1 day) | "Exam TOMORROW" |
+| 4 | 3h | "Exam in 3 HOURS" |
+
+**Task Reminders** (2 levels):
+- 1 day before (at 8 PM): "Task Tomorrow"
+- 2 hours before (if time set): "Task in 2 hours"
+
+**TODO Reminders** (1 level):
+- 1 hour before (if time set): "TODO Reminder"
 
 ### Voice Notes Flow
 1. User sends voice message → `handle_voice_message()` transcribes via Gemini
@@ -82,7 +110,7 @@ DATABASE_PATH=data/bot.db  (optional, defaults to data/bot.db)
 
 - `/setdate YYYY-MM-DD` - Override current date
 - `/settime HH:MM` - Override current time
-- `/trigger <type>` - Trigger notifications: briefing, offday, midnight, assignments, tasks, todos, semester
+- `/trigger <type>` - Trigger notifications: briefing, offday, midnight, assignments, tasks, todos, exams, semester
 - Settings menu shows current date/time with override warnings and reset buttons
 
 ## Adding Features

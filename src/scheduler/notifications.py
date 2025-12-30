@@ -57,6 +57,21 @@ ASSIGNMENT_REMINDER_MESSAGES = {
     7: "Assignment '{title}' is NOW DUE!",
 }
 
+# Exam reminder level thresholds (hours before exam)
+EXAM_REMINDER_LEVELS = {
+    1: 168,  # 1 week
+    2: 72,   # 3 days
+    3: 24,   # 1 day
+    4: 3,    # 3 hours
+}
+
+EXAM_REMINDER_MESSAGES = {
+    1: "📚 Exam in 1 WEEK: {title}\n📅 {exam_date}{time_str}{location_str}",
+    2: "📚 Exam in 3 DAYS: {title}\n📅 {exam_date}{time_str}{location_str}",
+    3: "⚠️ Exam TOMORROW: {title}\n📅 {exam_date}{time_str}{location_str}",
+    4: "🚨 Exam in 3 HOURS: {title}{time_str}{location_str}",
+}
+
 
 class NotificationScheduler:
     """Handles all scheduled notifications for the bot."""
@@ -116,6 +131,14 @@ class NotificationScheduler:
             IntervalTrigger(minutes=30, timezone=MY_TZ),
             id="todo_reminders",
             name="TODO Reminder Check",
+            replace_existing=True
+        )
+
+        self.scheduler.add_job(
+            self.check_exam_reminders,
+            IntervalTrigger(minutes=30, timezone=MY_TZ),
+            id="exam_reminders",
+            name="Exam Reminder Check",
             replace_existing=True
         )
 
@@ -568,6 +591,102 @@ Focus on the most urgent item if any."""
         message = f"⏰ TODO Reminder: {title}"
         if todo_time:
             message += f" at {format_time(todo_time)}"
+
+        for chat_id in chat_ids:
+            await self._send_notification(chat_id, message)
+
+    # ==================== Exam Reminders ====================
+
+    async def check_exam_reminders(self):
+        """Check and send exam reminders based on escalation levels."""
+        logger.info("Checking exam reminders")
+
+        exams = db.get_upcoming_exams()
+        now = get_now()
+
+        for exam in exams:
+            exam_date_str = exam.get("start_date")
+            exam_time_str = exam.get("exam_time")
+
+            if not exam_date_str:
+                continue
+
+            try:
+                # Parse exam date and time
+                exam_date = datetime.strptime(exam_date_str, "%Y-%m-%d").date()
+
+                # If exam has a specific time, use it; otherwise assume 9:00 AM
+                if exam_time_str:
+                    try:
+                        exam_time = datetime.strptime(exam_time_str, "%H:%M").time()
+                    except ValueError:
+                        exam_time = datetime.strptime("09:00", "%H:%M").time()
+                else:
+                    exam_time = datetime.strptime("09:00", "%H:%M").time()
+
+                exam_datetime = datetime.combine(exam_date, exam_time)
+                exam_datetime = MY_TZ.localize(exam_datetime)
+
+                hours_left = hours_until(exam_datetime, now)
+                current_level = exam.get("last_reminder_level", 0) or 0
+
+                # Determine which level should be sent
+                next_level = self._get_next_exam_reminder_level(hours_left, current_level)
+
+                if next_level and next_level > current_level:
+                    # Send reminder
+                    await self._send_exam_reminder(exam, next_level, exam_datetime)
+
+                    # Update reminder level
+                    db.update_exam_reminder_level(exam["id"], next_level)
+
+            except (ValueError, TypeError) as e:
+                logger.warning(f"Invalid date for exam {exam['id']}: {e}")
+
+    def _get_next_exam_reminder_level(self, hours_left: float, current_level: int) -> Optional[int]:
+        """Determine the next exam reminder level based on hours remaining."""
+        for level in range(current_level + 1, 5):  # Levels 1-4
+            threshold = EXAM_REMINDER_LEVELS.get(level, -1)
+            if threshold >= 0 and hours_left <= threshold:
+                return level
+        return None
+
+    async def _send_exam_reminder(
+        self,
+        exam: dict,
+        level: int,
+        exam_datetime: datetime
+    ):
+        """Send an exam reminder at the specified level."""
+        chat_ids = await self._get_all_chat_ids()
+
+        # Get exam details
+        title = exam.get("name") or exam.get("name_en") or "Exam"
+        subject = exam.get("subject_code", "")
+
+        # Format date
+        exam_date_formatted = exam_datetime.strftime("%A, %d %b %Y")
+
+        # Format time string (only if time is set)
+        time_str = ""
+        if exam.get("exam_time"):
+            time_str = f"\n⏰ {exam_datetime.strftime('%I:%M %p')}"
+
+        # Extract location from name if present (format: "... at LOCATION")
+        location_str = ""
+        name_en = exam.get("name_en", "")
+        if " at " in name_en:
+            location = name_en.split(" at ")[-1]
+            location_str = f"\n📍 {location}"
+
+        # Get message template
+        message_template = EXAM_REMINDER_MESSAGES.get(level, "Exam reminder: {title}")
+        message = message_template.format(
+            title=title,
+            exam_date=exam_date_formatted,
+            time_str=time_str,
+            location_str=location_str
+        )
 
         for chat_id in chat_ids:
             await self._send_notification(chat_id, message)

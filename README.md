@@ -11,6 +11,7 @@ A Telegram bot that helps UTeM students manage their academic schedule, assignme
 
 ### Task Tracking
 - **Assignments**: Track assignments with 7-level escalating reminders (3 days → 2 days → 1 day → 8 hours → 3 hours → 1 hour → due)
+- **Exams**: Track exams with 4-level escalating reminders (1 week → 3 days → 1 day → 3 hours)
 - **Tasks/Meetings**: Schedule meetings with 1-day and 2-hour reminders
 - **TODOs**: Quick personal tasks with optional time-based reminders
 
@@ -20,7 +21,39 @@ A Telegram bot that helps UTeM students manage their academic schedule, assignme
 | 10:00 PM | Tomorrow's classes briefing |
 | 8:00 PM | Off-day alert (if applicable) |
 | 12:00 AM | Midnight TODO review |
-| Every 30 min | Assignment/Task/TODO reminder checks |
+| Every 30 min | Assignment/Task/TODO/Exam reminder checks |
+
+### Reminder Escalation Levels
+
+#### Assignments (7 levels)
+| Level | Time Before Due | Message |
+|-------|-----------------|---------|
+| 1 | 3 days (72h) | "Assignment due in 3 days" |
+| 2 | 2 days (48h) | "Assignment due in 2 days" |
+| 3 | 1 day (24h) | "Assignment due TOMORROW!" |
+| 4 | 8 hours | "8 hours left!" |
+| 5 | 3 hours | "Only 3 hours left!" |
+| 6 | 1 hour | "URGENT: 1 hour remaining!" |
+| 7 | Due now | "Assignment is NOW DUE!" |
+
+#### Exams (4 levels)
+| Level | Time Before Exam | Message |
+|-------|------------------|---------|
+| 1 | 1 week (168h) | "Exam in 1 WEEK" |
+| 2 | 3 days (72h) | "Exam in 3 DAYS" |
+| 3 | 1 day (24h) | "Exam TOMORROW" |
+| 4 | 3 hours | "Exam in 3 HOURS" |
+
+#### Tasks (2 levels)
+| Level | When | Message |
+|-------|------|---------|
+| 1 | 8 PM day before | "Task Tomorrow" |
+| 2 | 2 hours before | "Task in 2 hours" |
+
+#### TODOs (1 level)
+| Level | When | Message |
+|-------|------|---------|
+| 1 | 1 hour before | "TODO Reminder" |
 
 ### Natural Language Processing
 - "Assignment report for BITP1113 due Friday 5pm" → Adds assignment
@@ -62,6 +95,7 @@ A Telegram bot that helps UTeM students manage their academic schedule, assignme
 - `assignments` - Assignment reminder check
 - `tasks` - Task reminder check
 - `todos` - TODO reminder check
+- `exams` - Exam reminder check
 - `semester` - Semester starting notification
 
 ## Tech Stack
