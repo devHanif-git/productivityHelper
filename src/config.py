@@ -57,8 +57,9 @@ class Config:
         if not cls.TELEGRAM_TOKEN:
             missing.append("TELEGRAM_TOKEN")
 
-        if not cls.GEMINI_API_KEY:
-            missing.append("GEMINI_API_KEY")
+        # Check if ANY Gemini key is available (either single or multiple)
+        if not cls.get_all_gemini_keys():
+            missing.append("GEMINI_API_KEY or GEMINI_API_KEYS")
 
         return missing
 
