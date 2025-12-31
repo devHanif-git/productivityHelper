@@ -480,7 +480,8 @@ gemini_client = None
 
 def _init_client():
     global gemini_client
-    if gemini_client is None and config.GEMINI_API_KEY:
+    # Check for any available keys (single or multiple)
+    if gemini_client is None and config.get_all_gemini_keys():
         gemini_client = GeminiClient()
 
 
