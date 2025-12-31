@@ -3,6 +3,7 @@
 import asyncio
 import base64
 import logging
+import time
 from typing import Optional
 
 from google import genai
@@ -14,14 +15,137 @@ logger = logging.getLogger(__name__)
 
 
 class GeminiClient:
-    """Wrapper for Google Gemini API with text and vision support."""
+    """Wrapper for Google Gemini API with text and vision support and automatic key rotation."""
 
     def __init__(self):
-        """Initialize the Gemini client with API key."""
-        self.client = genai.Client(api_key=config.GEMINI_API_KEY)
+        """Initialize the Gemini client with API key rotation support."""
+        self.api_keys = config.get_all_gemini_keys()
+        if not self.api_keys:
+            raise ValueError("No Gemini API keys configured")
+
+        self.current_key_index = 0
+        self.key_cooldowns: dict[int, float] = {}  # key_index -> cooldown_until_timestamp
+        self.cooldown_duration = 60  # seconds to wait before retrying a rate-limited key
+
+        # Initialize client with first key
+        self.client = genai.Client(api_key=self.api_keys[0])
         self.model = "gemini-flash-latest"  # More quota-friendly
         self.max_retries = 2
         self.retry_delay = 5  # seconds
+
+        logger.info(f"Gemini client initialized with {len(self.api_keys)} API key(s)")
+
+    def _is_rate_limit_error(self, error: Exception) -> bool:
+        """Check if the error is a rate limit error."""
+        error_str = str(error).lower()
+        return any(indicator in error_str for indicator in [
+            "429", "rate limit", "quota", "resource exhausted",
+            "too many requests", "rate_limit", "resourceexhausted"
+        ])
+
+    def _get_available_key_index(self) -> Optional[int]:
+        """Find the next available key that's not on cooldown."""
+        current_time = time.time()
+
+        # Try all keys starting from current index
+        for i in range(len(self.api_keys)):
+            key_index = (self.current_key_index + i) % len(self.api_keys)
+            cooldown_until = self.key_cooldowns.get(key_index, 0)
+
+            if current_time >= cooldown_until:
+                return key_index
+
+        # All keys are on cooldown, return the one that will be available soonest
+        soonest_index = min(self.key_cooldowns.keys(), key=lambda k: self.key_cooldowns[k])
+        wait_time = self.key_cooldowns[soonest_index] - current_time
+        logger.warning(f"All API keys on cooldown. Shortest wait: {wait_time:.1f}s (key {soonest_index + 1})")
+        return soonest_index
+
+    def _rotate_key(self, mark_current_limited: bool = True) -> bool:
+        """Rotate to the next available API key."""
+        if len(self.api_keys) <= 1:
+            logger.warning("Only one API key available, cannot rotate")
+            return False
+
+        if mark_current_limited:
+            # Mark current key as rate-limited
+            self.key_cooldowns[self.current_key_index] = time.time() + self.cooldown_duration
+            logger.info(f"API key {self.current_key_index + 1} rate-limited, cooldown for {self.cooldown_duration}s")
+
+        # Find next available key
+        next_index = self._get_available_key_index()
+        if next_index is None or next_index == self.current_key_index:
+            # If we can't find a different key, still try to move forward
+            next_index = (self.current_key_index + 1) % len(self.api_keys)
+
+        self.current_key_index = next_index
+        self.client = genai.Client(api_key=self.api_keys[self.current_key_index])
+        logger.info(f"Rotated to API key {self.current_key_index + 1}/{len(self.api_keys)}")
+        return True
+
+    async def _execute_with_rotation(self, operation_func, operation_name: str) -> Optional[str]:
+        """Execute an operation with automatic key rotation on rate limit."""
+        keys_tried = set()
+
+        while len(keys_tried) < len(self.api_keys):
+            # Check if current key is on cooldown
+            current_time = time.time()
+            cooldown_until = self.key_cooldowns.get(self.current_key_index, 0)
+
+            if current_time < cooldown_until:
+                wait_time = cooldown_until - current_time
+                if wait_time > 0 and len(keys_tried) < len(self.api_keys) - 1:
+                    # Try to rotate to another key instead of waiting
+                    self._rotate_key(mark_current_limited=False)
+                    continue
+                else:
+                    # All keys tried, wait for cooldown
+                    logger.info(f"Waiting {wait_time:.1f}s for key cooldown...")
+                    await asyncio.sleep(wait_time)
+
+            keys_tried.add(self.current_key_index)
+
+            for attempt in range(self.max_retries):
+                try:
+                    result = await operation_func()
+                    # Success! Clear cooldown for this key
+                    if self.current_key_index in self.key_cooldowns:
+                        del self.key_cooldowns[self.current_key_index]
+                    return result
+
+                except Exception as e:
+                    if self._is_rate_limit_error(e):
+                        logger.warning(f"{operation_name} rate limited on key {self.current_key_index + 1}: {e}")
+                        if self._rotate_key():
+                            break  # Try with new key immediately
+                        else:
+                            # Only one key, wait and retry
+                            await asyncio.sleep(self.retry_delay)
+                    else:
+                        logger.warning(f"{operation_name} failed (attempt {attempt + 1}): {e}")
+                        if attempt < self.max_retries - 1:
+                            await asyncio.sleep(self.retry_delay)
+
+        logger.error(f"{operation_name} failed after trying all {len(self.api_keys)} keys")
+        return None
+
+    def get_key_status(self) -> dict:
+        """Get status of all API keys for debugging."""
+        current_time = time.time()
+        status = {
+            "total_keys": len(self.api_keys),
+            "current_key": self.current_key_index + 1,
+            "keys": []
+        }
+        for i in range(len(self.api_keys)):
+            cooldown_until = self.key_cooldowns.get(i, 0)
+            remaining = max(0, cooldown_until - current_time)
+            status["keys"].append({
+                "index": i + 1,
+                "active": i == self.current_key_index,
+                "cooldown_remaining": f"{remaining:.0f}s" if remaining > 0 else "ready"
+            })
+        return status
 
     async def send_text(self, prompt: str) -> Optional[str]:
         """
@@ -33,21 +157,15 @@ class GeminiClient:
         Returns:
             The generated text response, or None if failed.
         """
-        for attempt in range(self.max_retries):
-            try:
-                response = await asyncio.to_thread(
-                    self.client.models.generate_content,
-                    model=self.model,
-                    contents=prompt
-                )
-                return response.text
-            except Exception as e:
-                logger.warning(f"Gemini text request failed (attempt {attempt + 1}): {e}")
-                if attempt < self.max_retries - 1:
-                    await asyncio.sleep(self.retry_delay)
+        async def operation():
+            response = await asyncio.to_thread(
+                self.client.models.generate_content,
+                model=self.model,
+                contents=prompt
+            )
+            return response.text
 
-        logger.error("Gemini text request failed after all retries")
-        return None
+        return await self._execute_with_rotation(operation, "Gemini text request")
 
     async def send_image(
         self,
@@ -66,27 +184,20 @@ class GeminiClient:
         Returns:
             The generated text response, or None if failed.
         """
-        for attempt in range(self.max_retries):
-            try:
-                # Create image part for multimodal input
-                image_part = types.Part.from_bytes(
-                    data=image_bytes,
-                    mime_type=mime_type
-                )
+        async def operation():
+            # Create image part for multimodal input
+            image_part = types.Part.from_bytes(
+                data=image_bytes,
+                mime_type=mime_type
+            )
+            response = await asyncio.to_thread(
+                self.client.models.generate_content,
+                model=self.model,
+                contents=[prompt, image_part]
+            )
+            return response.text
 
-                response = await asyncio.to_thread(
-                    self.client.models.generate_content,
-                    model=self.model,
-                    contents=[prompt, image_part]
-                )
-                return response.text
-            except Exception as e:
-                logger.warning(f"Gemini vision request failed (attempt {attempt + 1}): {e}")
-                if attempt < self.max_retries - 1:
-                    await asyncio.sleep(self.retry_delay)
-
-        logger.error("Gemini vision request failed after all retries")
-        return None
+        return await self._execute_with_rotation(operation, "Gemini vision request")
 
     async def send_image_with_json(
         self,
@@ -131,27 +242,20 @@ Just the raw JSON array or object."""
         Returns:
             The generated text response, or None if failed.
         """
-        for attempt in range(self.max_retries):
-            try:
-                # Create audio part for multimodal input
-                audio_part = types.Part.from_bytes(
-                    data=audio_bytes,
-                    mime_type=mime_type
-                )
+        async def operation():
+            # Create audio part for multimodal input
+            audio_part = types.Part.from_bytes(
+                data=audio_bytes,
+                mime_type=mime_type
+            )
+            response = await asyncio.to_thread(
+                self.client.models.generate_content,
+                model=self.model,
+                contents=[prompt, audio_part]
+            )
+            return response.text
 
-                response = await asyncio.to_thread(
-                    self.client.models.generate_content,
-                    model=self.model,
-                    contents=[prompt, audio_part]
-                )
-                return response.text
-            except Exception as e:
-                logger.warning(f"Gemini audio request failed (attempt {attempt + 1}): {e}")
-                if attempt < self.max_retries - 1:
-                    await asyncio.sleep(self.retry_delay)
-
-        logger.error("Gemini audio request failed after all retries")
-        return None
+        return await self._execute_with_rotation(operation, "Gemini audio request")
 
     async def transcribe_audio(self, audio_bytes: bytes, mime_type: str = "audio/ogg") -> Optional[str]:
         """
