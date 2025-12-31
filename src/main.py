@@ -12,6 +12,7 @@ from .bot.handlers import register_handlers
 from .scheduler.notifications import start_scheduler, stop_scheduler
 from .utils.logging_config import setup_logging
 from .utils.error_handlers import error_handler
+from .ai.gemini_client import get_gemini_client
 
 # Configure logging with file output
 setup_logging(log_level=logging.INFO, log_to_file=True)
@@ -40,6 +41,10 @@ def main() -> None:
         logger.error(f"Missing required configuration: {', '.join(missing)}")
         logger.error("Please check your .env file")
         sys.exit(1)
+
+    # Initialize Gemini client (logs the number of API keys)
+    gemini = get_gemini_client()
+    logger.info(f"Gemini client ready with {len(gemini.api_keys)} API key(s)")
 
     # Initialize database
     logger.info(f"Initializing database at {config.DATABASE_PATH}")
