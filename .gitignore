@@ -58,6 +58,9 @@ htmlcov/
 backups/
 *.db.gz
 
+# Claude
+.claude
+
 # AI
 #CLAUDE.md
 Testing-Done.md
